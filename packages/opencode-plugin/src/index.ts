@@ -1,5 +1,5 @@
 export { SessionStateStore } from "./state/sessionState";
-export type { SessionState, StartSessionOptions } from "./state/sessionState";
+export type { SessionState, StartSessionOptions, SessionStateStoreOptions } from "./state/sessionState";
 
 export { evaluateIdleLoop } from "./loop/idleLoop";
 export type { IdleLoopAction, RunStatusSnapshot } from "./loop/idleLoop";

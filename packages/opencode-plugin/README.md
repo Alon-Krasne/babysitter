@@ -44,6 +44,7 @@ See `HOOKS.md` for hook payloads and discovery order.
 - `enableHookDispatcher` (default: `true`)
 - `pluginRoot`
 - `userConfigDir`
+- `sessionStateFile` (default: `.a5c/state/opencode-sessions.json`)
 - `skillRunner`
 - `agentRunner`
 

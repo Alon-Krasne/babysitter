@@ -1,3 +1,6 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+
 export interface SessionState {
   active: boolean;
   sessionId: string;
@@ -17,10 +20,22 @@ export interface StartSessionOptions {
   now?: Date;
 }
 
+export interface SessionStateStoreOptions {
+  persistenceFile?: string;
+}
+
 const DEFAULT_MAX_ITERATIONS = 256;
 
 export class SessionStateStore {
   private readonly sessions = new Map<string, SessionState>();
+  private readonly persistenceFile?: string;
+
+  constructor(options: SessionStateStoreOptions = {}) {
+    this.persistenceFile = options.persistenceFile?.trim() || undefined;
+    if (this.persistenceFile) {
+      this.loadFromDisk();
+    }
+  }
 
   start(sessionId: string, options: StartSessionOptions): SessionState {
     const normalizedSessionId = normalizeSessionId(sessionId);
@@ -52,6 +67,7 @@ export class SessionStateStore {
     };
 
     this.sessions.set(normalizedSessionId, cloneState(state));
+    this.persistToDisk();
     return cloneState(state);
   }
 
@@ -66,6 +82,7 @@ export class SessionStateStore {
       throw new Error("sessionId mismatch between key and state payload");
     }
     this.sessions.set(normalizedSessionId, cloneState(next));
+    this.persistToDisk();
     return cloneState(next);
   }
 
@@ -89,15 +106,65 @@ export class SessionStateStore {
       runId: normalizedRunId,
     };
     this.sessions.set(normalizedSessionId, next);
+    this.persistToDisk();
     return cloneState(next);
   }
 
   stop(sessionId: string): boolean {
-    return this.sessions.delete(normalizeSessionId(sessionId));
+    const deleted = this.sessions.delete(normalizeSessionId(sessionId));
+    if (deleted) {
+      this.persistToDisk();
+    }
+    return deleted;
   }
 
   listActive(): SessionState[] {
     return Array.from(this.sessions.values()).map((state) => cloneState(state));
+  }
+
+  private loadFromDisk(): void {
+    if (!this.persistenceFile) {
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      const raw = readFileSync(this.persistenceFile, "utf8");
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      return;
+    }
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return;
+    }
+
+    const sessions = (parsed as Record<string, unknown>).sessions;
+    if (!Array.isArray(sessions)) {
+      return;
+    }
+
+    for (const item of sessions) {
+      const normalized = normalizePersistedState(item);
+      if (!normalized) {
+        continue;
+      }
+      this.sessions.set(normalized.sessionId, normalized);
+    }
+  }
+
+  private persistToDisk(): void {
+    if (!this.persistenceFile) {
+      return;
+    }
+
+    const payload = {
+      version: 1,
+      sessions: Array.from(this.sessions.values()),
+    };
+
+    mkdirSync(path.dirname(this.persistenceFile), { recursive: true });
+    writeFileSync(this.persistenceFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   }
 }
 
@@ -114,4 +181,67 @@ function cloneState(state: SessionState): SessionState {
     ...state,
     iterationTimes: [...state.iterationTimes],
   };
+}
+
+function normalizePersistedState(value: unknown): SessionState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const sessionId = asNonEmptyString(record.sessionId);
+  const prompt = asNonEmptyString(record.prompt);
+  const startedAt = asNonEmptyString(record.startedAt);
+  const lastIterationAt = asNonEmptyString(record.lastIterationAt);
+  if (!sessionId || !prompt || !startedAt || !lastIterationAt) {
+    return null;
+  }
+
+  const iteration = asInteger(record.iteration);
+  const maxIterations = asInteger(record.maxIterations);
+  if (iteration === null || maxIterations === null) {
+    return null;
+  }
+
+  const runId = asNullableString(record.runId);
+  const active = typeof record.active === "boolean" ? record.active : true;
+  const iterationTimes = Array.isArray(record.iterationTimes)
+    ? record.iterationTimes
+        .map((value) => asInteger(value))
+        .filter((value): value is number => value !== null && value > 0)
+    : [];
+
+  return {
+    active,
+    sessionId,
+    iteration,
+    maxIterations,
+    runId,
+    prompt,
+    startedAt,
+    lastIterationAt,
+    iterationTimes,
+  };
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function asNullableString(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return asNonEmptyString(value);
+}
+
+function asInteger(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  const rounded = Math.floor(value);
+  if (!Number.isFinite(rounded)) {
+    return null;
+  }
+  return rounded;
 }

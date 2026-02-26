@@ -7,6 +7,7 @@ import { AgentRunner, SkillRunner } from "./orchestrator/nativeOrchestrator";
 import { createToolLifecycleHooks } from "./plugin/toolLifecycleHooks";
 import { createSessionAgentRunner, createSessionSkillRunner } from "./runners/sessionRunners";
 import { createBabysitterPluginHooks, createBabysitterRuntime } from "./runtime";
+import { SessionStateStore } from "./state/sessionState";
 import { createBabysitterToolHandlers } from "./tools/handlers";
 
 export type Plugin = (ctx: unknown) => Promise<Record<string, unknown>>;
@@ -53,6 +54,7 @@ export interface CreateBabysitterPluginOptions {
   enableHookDispatcher?: boolean;
   pluginRoot?: string;
   userConfigDir?: string;
+  sessionStateFile?: string;
   skillRunner?: SkillRunner;
   agentRunner?: AgentRunner;
   now?: () => Date;
@@ -77,6 +79,9 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
           });
     const skillRunner = options.skillRunner ?? createSessionSkillRunner(pluginCtx.client);
     const agentRunner = options.agentRunner ?? createSessionAgentRunner(pluginCtx.client);
+    const sessions = new SessionStateStore({
+      persistenceFile: options.sessionStateFile ?? path.join(worktree, ".a5c", "state", "opencode-sessions.json"),
+    });
     const lifecycleHooks = createToolLifecycleHooks({
       hookDispatcher,
       worktree,
@@ -84,6 +89,7 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
     });
     const runtime = createBabysitterRuntime({
       client: pluginCtx.client,
+      sessions,
       cli,
       worktree,
       skillRunner,
