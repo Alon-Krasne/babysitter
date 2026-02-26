@@ -37,6 +37,7 @@ export interface BabysitterRuntimeOptions {
     Partial<Pick<BabysitterCli, "taskListPending" | "taskPost">>;
   worktree?: string;
   maxAutoRunnable?: number;
+  maxParallelTasks?: number;
   nodeRunner?: NodeRunner;
   skillRunner?: SkillRunner;
   agentRunner?: AgentRunner;
@@ -105,6 +106,7 @@ export function createBabysitterRuntime(options: BabysitterRuntimeOptions): Baby
             worktree: options.worktree,
             cli: options.cli,
             maxAutoRunnable: options.maxAutoRunnable,
+            maxParallelTasks: options.maxParallelTasks,
             nodeRunner: options.nodeRunner,
             skillRunner: options.skillRunner,
             agentRunner: options.agentRunner,

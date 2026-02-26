@@ -13,6 +13,9 @@ Hook failures are recorded but do not abort orchestration.
 
 ## Hook names currently dispatched
 
+- `pre-branch`
+- `pre-commit`
+- `post-planning`
 - `on-iteration-start`
 - `on-iteration-end`
 - `on-run-start`

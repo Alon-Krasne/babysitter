@@ -4,6 +4,7 @@ import { CliBreakpointClient } from "./breakpoints/cliBreakpointClient";
 import { BabysitterCli, SpawnCommandExecutor } from "./cli/babysitterCli";
 import { HookDispatcher } from "./hooks/dispatcher";
 import { AgentRunner, SkillRunner } from "./orchestrator/nativeOrchestrator";
+import { createToolLifecycleHooks } from "./plugin/toolLifecycleHooks";
 import { createSessionAgentRunner, createSessionSkillRunner } from "./runners/sessionRunners";
 import { createBabysitterPluginHooks, createBabysitterRuntime } from "./runtime";
 import { createBabysitterToolHandlers } from "./tools/handlers";
@@ -48,6 +49,7 @@ export interface CreateBabysitterPluginOptions {
   breakpointCommand?: string;
   enableBreakpointCli?: boolean;
   breakpointPollIntervalSeconds?: number;
+  maxParallelTasks?: number;
   enableHookDispatcher?: boolean;
   pluginRoot?: string;
   userConfigDir?: string;
@@ -75,6 +77,11 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
           });
     const skillRunner = options.skillRunner ?? createSessionSkillRunner(pluginCtx.client);
     const agentRunner = options.agentRunner ?? createSessionAgentRunner(pluginCtx.client);
+    const lifecycleHooks = createToolLifecycleHooks({
+      hookDispatcher,
+      worktree,
+      now: options.now,
+    });
     const runtime = createBabysitterRuntime({
       client: pluginCtx.client,
       cli,
@@ -83,6 +90,7 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
       agentRunner,
       breakpoints,
       breakpointPollIntervalSeconds: options.breakpointPollIntervalSeconds,
+      maxParallelTasks: options.maxParallelTasks,
       hookDispatcher,
       now: options.now,
     });
@@ -137,6 +145,7 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
 
     return {
       ...createBabysitterPluginHooks(runtime),
+      ...lifecycleHooks,
       tool: {
         babysitter_setup: defineTool({
           description: handlers.babysitter_setup.description,

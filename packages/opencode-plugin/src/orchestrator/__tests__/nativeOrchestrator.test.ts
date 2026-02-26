@@ -456,4 +456,76 @@ describe("runNativeOrchestrator", () => {
     expect(cli.postCalls).toHaveLength(1);
     expect(cli.postCalls[0].options.status).toBe("error");
   });
+
+  it("executes node tasks in parallel when maxParallelTasks is set", async () => {
+    const runId = "run-node-parallel";
+    const effectIds = ["ef-node-1", "ef-node-2"];
+    const runDir = path.join(worktree, ".a5c", "runs", runId);
+
+    for (const effectId of effectIds) {
+      const effectDir = path.join(runDir, "tasks", effectId);
+      await fs.mkdir(effectDir, { recursive: true });
+      await fs.writeFile(path.join(effectDir, "inputs.json"), JSON.stringify({ value: effectId }), "utf8");
+      await fs.writeFile(
+        path.join(effectDir, "task.json"),
+        JSON.stringify(
+          {
+            kind: "node",
+            node: { entry: "scripts/noop.js" },
+            inputsRef: `tasks/${effectId}/inputs.json`,
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+    }
+
+    const cli = new FakeCli(
+      "waiting",
+      effectIds.map((effectId) => ({
+        effectId,
+        kind: "node",
+        taskDefRef: `tasks/${effectId}/task.json`,
+        inputsRef: `tasks/${effectId}/inputs.json`,
+      }))
+    );
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const nodeRunner = {
+      run: async (input: {
+        env: Record<string, string | undefined>;
+      }) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        const outputPath = input.env.BABYSITTER_OUTPUT_JSON as string;
+        await fs.writeFile(outputPath, JSON.stringify({ ok: true }), "utf8");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        inFlight -= 1;
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+        };
+      },
+    };
+
+    const action = await runNativeOrchestrator({
+      runId,
+      worktree,
+      cli,
+      nodeRunner,
+      maxAutoRunnable: 2,
+      maxParallelTasks: 2,
+    });
+
+    expect(action).toEqual({
+      action: "executed-tasks",
+      count: 2,
+      reason: "auto-runnable-tasks",
+    });
+    expect(cli.postCalls).toHaveLength(2);
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+  });
 });

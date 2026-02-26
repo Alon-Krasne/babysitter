@@ -184,6 +184,7 @@ export interface NativeOrchestratorOptions {
   breakpoints?: BreakpointClient;
   skillRunner?: SkillRunner;
   agentRunner?: AgentRunner;
+  maxParallelTasks?: number;
   onTaskEvent?: (event: {
     phase: "start" | "complete" | "fail";
     runId: string;
@@ -225,12 +226,13 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
   }
 
   const autoRunnableLimit = options.maxAutoRunnable ?? DEFAULT_AUTO_RUN_LIMIT;
+  const maxParallel = normalizeParallelism(options.maxParallelTasks);
   const nodeTasks = pending.filter((task) => task.kind === "node").slice(0, autoRunnableLimit);
   if (nodeTasks.length > 0) {
     const runDir = path.join(worktree, ".a5c", "runs", runId);
     const nodeRunner = options.nodeRunner ?? createDefaultNodeRunner();
 
-    for (const task of nodeTasks) {
+    await runWithConcurrency(nodeTasks, maxParallel, async (task) => {
       await executeNodeTask({
         runId,
         runDir,
@@ -240,7 +242,7 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
         nodeRunner,
         onTaskEvent: options.onTaskEvent,
       });
-    }
+    });
 
     return {
       action: "executed-tasks",
@@ -295,9 +297,10 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
 
   const skillTasks = pending.filter((task) => task.kind === "skill");
   if (skillTasks.length > 0) {
-    if (options.skillRunner) {
+    const skillRunner = options.skillRunner;
+    if (skillRunner) {
       const runDir = path.join(worktree, ".a5c", "runs", runId);
-      for (const task of skillTasks) {
+      await runWithConcurrency(skillTasks, maxParallel, async (task) => {
         await executeDelegatedTask({
           sessionId: options.sessionId,
           runId,
@@ -305,12 +308,12 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
           task,
           cli: options.cli,
           worktree,
-          runner: options.skillRunner,
+          runner: skillRunner,
           fallbackErrorMessage: "Skill task execution failed",
           kind: "skill",
           onTaskEvent: options.onTaskEvent,
         });
-      }
+      });
       return {
         action: "executed-skills",
         count: skillTasks.length,
@@ -331,9 +334,10 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
 
   const agentTasks = pending.filter((task) => task.kind === "agent");
   if (agentTasks.length > 0) {
-    if (options.agentRunner) {
+    const agentRunner = options.agentRunner;
+    if (agentRunner) {
       const runDir = path.join(worktree, ".a5c", "runs", runId);
-      for (const task of agentTasks) {
+      await runWithConcurrency(agentTasks, maxParallel, async (task) => {
         await executeDelegatedTask({
           sessionId: options.sessionId,
           runId,
@@ -341,12 +345,12 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
           task,
           cli: options.cli,
           worktree,
-          runner: options.agentRunner,
+          runner: agentRunner,
           fallbackErrorMessage: "Agent task execution failed",
           kind: "agent",
           onTaskEvent: options.onTaskEvent,
         });
-      }
+      });
       return {
         action: "executed-agents",
         count: agentTasks.length,
@@ -959,6 +963,39 @@ async function emitTaskEvent(
   } catch {
     // Ignore lifecycle callback failures.
   }
+}
+
+function normalizeParallelism(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 3;
+  }
+  const rounded = Math.floor(value);
+  if (rounded < 1) {
+    return 1;
+  }
+  return rounded;
+}
+
+async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+  if (items.length === 0) {
+    return;
+  }
+
+  const boundedConcurrency = Math.max(1, Math.min(concurrency, items.length));
+  let cursor = 0;
+
+  const runners = Array.from({ length: boundedConcurrency }, async () => {
+    while (true) {
+      const index = cursor;
+      if (index >= items.length) {
+        return;
+      }
+      cursor += 1;
+      await worker(items[index], index);
+    }
+  });
+
+  await Promise.all(runners);
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
