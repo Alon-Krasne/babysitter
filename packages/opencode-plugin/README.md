@@ -47,6 +47,8 @@ See `HOOKS.md` for hook payloads and discovery order.
 - `sessionStateFile` (default: `.a5c/state/opencode-sessions.json`)
 - `skillRunner`
 - `agentRunner`
+- `waitForAskResponse` (default: `false`)
+- `askResponseTimeoutMs` (default: `300000`)
 
 ## Custom runners
 

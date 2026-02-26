@@ -4,6 +4,7 @@ import { CliBreakpointClient } from "./breakpoints/cliBreakpointClient";
 import { BabysitterCli, SpawnCommandExecutor } from "./cli/babysitterCli";
 import { HookDispatcher } from "./hooks/dispatcher";
 import { AgentRunner, SkillRunner } from "./orchestrator/nativeOrchestrator";
+import { AskResponseCoordinator } from "./plugin/askResponseCoordinator";
 import { createToolLifecycleHooks } from "./plugin/toolLifecycleHooks";
 import { createSessionAgentRunner, createSessionSkillRunner } from "./runners/sessionRunners";
 import { createBabysitterPluginHooks, createBabysitterRuntime } from "./runtime";
@@ -57,6 +58,8 @@ export interface CreateBabysitterPluginOptions {
   sessionStateFile?: string;
   skillRunner?: SkillRunner;
   agentRunner?: AgentRunner;
+  waitForAskResponse?: boolean;
+  askResponseTimeoutMs?: number;
   now?: () => Date;
 }
 
@@ -82,6 +85,7 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
     const sessions = new SessionStateStore({
       persistenceFile: options.sessionStateFile ?? path.join(worktree, ".a5c", "state", "opencode-sessions.json"),
     });
+    const askCoordinator = new AskResponseCoordinator();
     const lifecycleHooks = createToolLifecycleHooks({
       hookDispatcher,
       worktree,
@@ -120,6 +124,17 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
           },
         });
 
+        if (options.waitForAskResponse) {
+          try {
+            return await askCoordinator.waitForAnswer({
+              sessionId: request.sessionId,
+              timeoutMs: options.askResponseTimeoutMs ?? 300000,
+            });
+          } catch {
+            return { status: "prompted" as const };
+          }
+        }
+
         return { status: "prompted" as const };
       },
       onRunStart: async (event) => {
@@ -149,9 +164,25 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
       now: options.now,
     });
 
+    const runtimeHooks = createBabysitterPluginHooks(runtime);
+
     return {
-      ...createBabysitterPluginHooks(runtime),
+      ...runtimeHooks,
       ...lifecycleHooks,
+      event: async (input: { event: { type: string; properties?: Record<string, unknown> } }) => {
+        if (options.waitForAskResponse && input.event.type === "message.updated") {
+          askCoordinator.resolveFromUserMessage(input.event);
+        }
+
+        if (input.event.type === "session.deleted") {
+          const sessionId = extractEventSessionId(input.event.properties);
+          if (sessionId) {
+            askCoordinator.rejectSession(sessionId, "Session deleted while waiting for answer");
+          }
+        }
+
+        await runtimeHooks.event(input as never);
+      },
       tool: {
         babysitter_setup: defineTool({
           description: handlers.babysitter_setup.description,
@@ -235,3 +266,17 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
 }
 
 export const BabysitterPlugin: Plugin = createBabysitterPlugin();
+
+function extractEventSessionId(properties: Record<string, unknown> | undefined): string | null {
+  if (!properties) {
+    return null;
+  }
+  const keys = ["sessionId", "sessionID", "session_id", "id"];
+  for (const key of keys) {
+    const value = properties[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}

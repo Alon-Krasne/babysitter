@@ -77,4 +77,55 @@ describe("createBabysitterPlugin", () => {
       question: "Proceed?",
     });
   });
+
+  it("can wait for ask response from message.updated events", async () => {
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const plugin = createBabysitterPlugin({
+      enableBreakpointCli: false,
+      enableHookDispatcher: false,
+      waitForAskResponse: true,
+      askResponseTimeoutMs: 1000,
+      sessionStateFile: path.join(tempDir, "state", "sessions.json"),
+      now: () => new Date("2026-02-27T00:00:00.000Z"),
+    });
+
+    const hooks = await plugin({
+      client: {
+        session: { prompt },
+      },
+      worktree: tempDir,
+    });
+
+    const askTool = (hooks.tool as Record<string, { execute: (args: unknown, ctx: unknown) => Promise<unknown> }>).babysitter_ask;
+    const pending = askTool.execute(
+      { question: "Proceed?" },
+      { sessionID: "session-1" }
+    );
+
+    await vi.waitFor(() => {
+      expect(prompt).toHaveBeenCalledTimes(1);
+    });
+
+    setTimeout(() => {
+      void hooks.event({
+        event: {
+          type: "message.updated",
+          properties: {
+            sessionId: "session-1",
+            message: {
+              role: "user",
+              text: "yes",
+            },
+          },
+        },
+      });
+    }, 0);
+
+    await expect(pending).resolves.toEqual({
+      sessionId: "session-1",
+      status: "answered",
+      answer: "yes",
+      question: "Proceed?",
+    });
+  });
 });
