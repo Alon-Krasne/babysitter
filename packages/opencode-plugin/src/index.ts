@@ -45,6 +45,9 @@ export type {
 export { CliBreakpointClient } from "./breakpoints/cliBreakpointClient";
 export type { CliBreakpointClientOptions } from "./breakpoints/cliBreakpointClient";
 
+export { createSessionSkillRunner, createSessionAgentRunner } from "./runners/sessionRunners";
+export type { SessionRunnerOptions } from "./runners/sessionRunners";
+
 export { createBabysitterRuntime, createBabysitterPluginHooks } from "./runtime";
 export type {
   BabysitterRuntime,

@@ -304,6 +304,7 @@ describe("createBabysitterRuntime", () => {
 
       expect(result.type).toBe("prompt");
       expect(skillRunner.run).toHaveBeenCalledTimes(1);
+      expect(skillRunner.run.mock.calls[0]?.[0]?.sessionId).toBe("session-1");
       expect(taskPost).toHaveBeenCalledTimes(1);
       expect(prompt.mock.calls[0]?.[0]?.body?.parts?.[0]?.text).toContain("executed 1 skill task");
     } finally {

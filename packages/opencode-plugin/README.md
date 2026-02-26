@@ -45,3 +45,21 @@ See `HOOKS.md` for hook payloads and discovery order.
 - `userConfigDir`
 - `skillRunner`
 - `agentRunner`
+
+## Custom runners
+
+By default, the plugin creates session-based runners that execute delegated skill/agent tasks through `client.session.prompt()` with structured JSON output.
+
+`skillRunner` and `agentRunner` let you execute delegated effects and return structured results.
+
+Each runner receives input/output refs and parsed input payload, then must return:
+
+- `{ status: "ok", value: <json> }` to post success
+- `{ status: "error", error: <json> }` to post failure
+
+See exported types in `src/index.ts`:
+
+- `DelegatedTaskInput`
+- `DelegatedTaskResult`
+- `SkillRunner`
+- `AgentRunner`

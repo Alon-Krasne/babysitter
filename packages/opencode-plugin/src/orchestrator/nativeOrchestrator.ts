@@ -146,6 +146,7 @@ export interface NodeRunner {
 }
 
 export interface DelegatedTaskInput {
+  sessionId?: string;
   runId: string;
   effectId: string;
   runDir: string;
@@ -175,6 +176,7 @@ export interface AgentRunner {
 }
 
 export interface NativeOrchestratorOptions {
+  sessionId?: string;
   runId: string;
   worktree: string;
   cli: Pick<BabysitterCli, "runStatus" | "taskListPending" | "taskPost">;
@@ -297,6 +299,7 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
       const runDir = path.join(worktree, ".a5c", "runs", runId);
       for (const task of skillTasks) {
         await executeDelegatedTask({
+          sessionId: options.sessionId,
           runId,
           runDir,
           task,
@@ -332,6 +335,7 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
       const runDir = path.join(worktree, ".a5c", "runs", runId);
       for (const task of agentTasks) {
         await executeDelegatedTask({
+          sessionId: options.sessionId,
           runId,
           runDir,
           task,
@@ -648,6 +652,7 @@ async function executeBreakpointTask(input: {
 }
 
 async function executeDelegatedTask(input: {
+  sessionId?: string;
   runId: string;
   runDir: string;
   task: TaskListEntry;
@@ -708,6 +713,7 @@ async function executeDelegatedTask(input: {
 
   try {
     const runResult = await input.runner.run({
+      sessionId: input.sessionId,
       runId: input.runId,
       effectId: input.task.effectId,
       runDir: input.runDir,

@@ -4,6 +4,7 @@ import { CliBreakpointClient } from "./breakpoints/cliBreakpointClient";
 import { BabysitterCli, SpawnCommandExecutor } from "./cli/babysitterCli";
 import { HookDispatcher } from "./hooks/dispatcher";
 import { AgentRunner, SkillRunner } from "./orchestrator/nativeOrchestrator";
+import { createSessionAgentRunner, createSessionSkillRunner } from "./runners/sessionRunners";
 import { createBabysitterPluginHooks, createBabysitterRuntime } from "./runtime";
 import { createBabysitterToolHandlers } from "./tools/handlers";
 
@@ -72,12 +73,14 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
             pluginRoot: options.pluginRoot ?? path.join(__dirname, ".."),
             userConfigDir: options.userConfigDir,
           });
+    const skillRunner = options.skillRunner ?? createSessionSkillRunner(pluginCtx.client);
+    const agentRunner = options.agentRunner ?? createSessionAgentRunner(pluginCtx.client);
     const runtime = createBabysitterRuntime({
       client: pluginCtx.client,
       cli,
       worktree,
-      skillRunner: options.skillRunner,
-      agentRunner: options.agentRunner,
+      skillRunner,
+      agentRunner,
       breakpoints,
       breakpointPollIntervalSeconds: options.breakpointPollIntervalSeconds,
       hookDispatcher,

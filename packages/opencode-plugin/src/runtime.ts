@@ -100,6 +100,7 @@ export function createBabysitterRuntime(options: BabysitterRuntimeOptions): Baby
 
         if (supportsNativeOrchestrator(options.cli) && options.worktree) {
           nativeDecision = await runNativeOrchestrator({
+            sessionId,
             runId: current.runId,
             worktree: options.worktree,
             cli: options.cli,
