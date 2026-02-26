@@ -1,0 +1,35 @@
+{
+  "name": "@a5c-ai/babysitter-opencode",
+  "version": "0.0.169",
+  "description": "OpenCode plugin adapter for babysitter orchestration workflows.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./plugin": "./dist/plugin.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "commands",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rimraf dist",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@a5c-ai/babysitter-sdk": "latest",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.4.2",
+    "vitest": "^1.2.2"
+  }
+}

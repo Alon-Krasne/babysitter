@@ -22,6 +22,7 @@
     "test": "npm run test --workspace=babysitter-vscode",
     "test:ci": "npm run test:ci --workspace=babysitter-vscode",
     "test:sdk": "npm run test --workspace=@a5c-ai/babysitter-sdk",
+    "test:opencode-plugin": "npm run test --workspace=@a5c-ai/babysitter-opencode",
     "build:sdk": "npm run build --workspace=@a5c-ai/babysitter-sdk"
   },
   "devDependencies": {
