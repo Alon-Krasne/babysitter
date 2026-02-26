@@ -71,6 +71,8 @@ export type {
   ScoreCriterion,
   ScoreArgs,
   ScoreResult,
+  RunStartEvent,
+  ScoreEvent,
   BabysitterToolHandlers,
 } from "./tools/handlers";
 

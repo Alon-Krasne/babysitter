@@ -23,6 +23,31 @@ describe("createBabysitterToolHandlers", () => {
     expect(runtime.sessions.get("session-1")?.maxIterations).toBe(5);
   });
 
+  it("emits run-start callback when setup includes runId", async () => {
+    const runtime = createBabysitterRuntime({
+      client: { session: { prompt: vi.fn().mockResolvedValue(undefined) } },
+      now: () => new Date("2026-02-26T10:00:00.000Z"),
+    });
+    const onRunStart = vi.fn().mockResolvedValue(undefined);
+    const handlers = createBabysitterToolHandlers(runtime, {
+      onRunStart,
+      now: () => new Date("2026-02-26T10:00:00.000Z"),
+    });
+
+    await handlers.babysitter_setup.execute(
+      { prompt: "Implement feature", runId: "run-setup" },
+      { sessionID: "session-1" }
+    );
+
+    expect(onRunStart).toHaveBeenCalledTimes(1);
+    expect(onRunStart).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      runId: "run-setup",
+      source: "setup",
+      timestamp: "2026-02-26T10:00:00.000Z",
+    });
+  });
+
   it("resumes an existing run and uses cli state", async () => {
     const runtime = createBabysitterRuntime({
       client: { session: { prompt: vi.fn().mockResolvedValue(undefined) } },
@@ -158,6 +183,35 @@ describe("createBabysitterToolHandlers", () => {
         { name: "tests", score: 80, weight: 1 },
         { name: "scope", score: 70, weight: 1 },
       ],
+    });
+  });
+
+  it("emits score callback with session context", async () => {
+    const runtime = createBabysitterRuntime({
+      client: { session: { prompt: vi.fn().mockResolvedValue(undefined) } },
+      now: () => new Date("2026-02-26T10:00:00.000Z"),
+    });
+    const onScore = vi.fn().mockResolvedValue(undefined);
+    const handlers = createBabysitterToolHandlers(runtime, {
+      onScore,
+      now: () => new Date("2026-02-26T10:00:00.000Z"),
+    });
+
+    await handlers.babysitter_score.execute(
+      {
+        criteria: [{ name: "correctness", score: 90 }],
+      },
+      { sessionID: "session-score" }
+    );
+
+    expect(onScore).toHaveBeenCalledTimes(1);
+    expect(onScore).toHaveBeenCalledWith({
+      sessionId: "session-score",
+      score: 90,
+      threshold: 80,
+      passed: true,
+      breakdown: [{ name: "correctness", score: 90, weight: 1 }],
+      timestamp: "2026-02-26T10:00:00.000Z",
     });
   });
 });

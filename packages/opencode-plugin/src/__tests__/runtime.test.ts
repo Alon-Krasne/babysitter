@@ -203,6 +203,7 @@ describe("createBabysitterRuntime", () => {
     try {
       const runId = "run-runtime-skill";
       const prompt = vi.fn().mockResolvedValue(undefined);
+      const dispatch = vi.fn().mockResolvedValue({ hookName: "x", results: [] });
       const runStatus = vi
         .fn()
         .mockResolvedValueOnce({ state: "waiting" })
@@ -317,6 +318,7 @@ describe("createBabysitterRuntime", () => {
     try {
       const runId = "run-runtime-breakpoint";
       const prompt = vi.fn().mockResolvedValue(undefined);
+      const dispatch = vi.fn().mockResolvedValue({ hookName: "x", results: [] });
       const runStatus = vi
         .fn()
         .mockResolvedValueOnce({ state: "waiting" })
@@ -343,6 +345,9 @@ describe("createBabysitterRuntime", () => {
           taskListPending,
           taskPost,
         },
+        hookDispatcher: {
+          dispatch,
+        },
         worktree,
         breakpoints,
         now: () => new Date("2026-02-26T12:00:20.000Z"),
@@ -362,6 +367,8 @@ describe("createBabysitterRuntime", () => {
       expect(breakpoints.wait).toHaveBeenCalledTimes(1);
       expect(prompt).toHaveBeenCalledTimes(1);
       expect(prompt.mock.calls[0]?.[0]?.body?.parts?.[0]?.text).toContain("processed 1 breakpoint task");
+      const hookNames = dispatch.mock.calls.map((call) => call[0]);
+      expect(hookNames).toContain("on-breakpoint");
     } finally {
       await fs.rm(worktree, { recursive: true, force: true });
     }

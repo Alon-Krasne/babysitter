@@ -12,7 +12,7 @@ OpenCode adapter plugin for Babysitter orchestration workflows.
   - Surfaces `skill` and `agent` pending task instructions back into continuation prompts.
 - Hook dispatcher parity:
   - Discovers and executes shell hooks from `.a5c/hooks/<hook>`, `~/.config/babysitter/hooks/<hook>`, and package hooks.
-  - Dispatches `on-iteration-start`, `on-iteration-end`, `on-run-complete`, and `on-run-fail` lifecycle payloads.
+  - Dispatches `on-run-start`, `on-iteration-start`, `on-step-dispatch`, `on-breakpoint`, `on-iteration-end`, `on-score`, `on-run-complete`, and `on-run-fail` lifecycle payloads.
 - Custom tools:
   - `babysitter_setup`
   - `babysitter_resume`

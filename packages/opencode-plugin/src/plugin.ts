@@ -108,6 +108,30 @@ export function createBabysitterPlugin(options: CreateBabysitterPluginOptions = 
 
         return { status: "prompted" as const };
       },
+      onRunStart: async (event) => {
+        if (!hookDispatcher) {
+          return;
+        }
+        await hookDispatcher.dispatch("on-run-start", {
+          runId: event.runId,
+          sessionId: event.sessionId,
+          source: event.source,
+          timestamp: event.timestamp,
+        });
+      },
+      onScore: async (event) => {
+        if (!hookDispatcher) {
+          return;
+        }
+        await hookDispatcher.dispatch("on-score", {
+          sessionId: event.sessionId ?? null,
+          score: event.score,
+          threshold: event.threshold,
+          passed: event.passed,
+          breakdown: event.breakdown,
+          timestamp: event.timestamp,
+        });
+      },
       now: options.now,
     });
 

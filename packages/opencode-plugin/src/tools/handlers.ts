@@ -68,6 +68,22 @@ export interface ScoreResult {
   breakdown: Array<{ name: string; score: number; weight: number }>;
 }
 
+export interface RunStartEvent {
+  sessionId: string;
+  runId: string;
+  source: "setup" | "resume" | "associate";
+  timestamp: string;
+}
+
+export interface ScoreEvent {
+  sessionId?: string;
+  score: number;
+  threshold: number;
+  passed: boolean;
+  breakdown: Array<{ name: string; score: number; weight: number }>;
+  timestamp: string;
+}
+
 type CliStatusProvider = Pick<{
   runStatus(runId: string, cwd?: string): Promise<RunStatusResult>;
 }, "runStatus">;
@@ -93,6 +109,8 @@ export function createBabysitterToolHandlers(
     cli?: CliStatusProvider;
     now?: () => Date;
     askUser?: (request: AskUserRequest) => Promise<AskUserResponse>;
+    onRunStart?: (event: RunStartEvent) => Promise<void>;
+    onScore?: (event: ScoreEvent) => Promise<void>;
   } = {}
 ): BabysitterToolHandlers {
   return {
@@ -109,6 +127,14 @@ export function createBabysitterToolHandlers(
         const state = runtime.sessions.get(sessionId);
         if (!state) {
           throw new Error("Failed to initialize babysitter session state");
+        }
+        if (state.runId) {
+          await emitRunStartIfPossible(options.onRunStart, {
+            sessionId,
+            runId: state.runId,
+            source: "setup",
+            timestamp: (options.now?.() ?? new Date()).toISOString(),
+          });
         }
         return {
           sessionId,
@@ -143,6 +169,13 @@ export function createBabysitterToolHandlers(
           now: options.now?.(),
         });
 
+        await emitRunStartIfPossible(options.onRunStart, {
+          sessionId,
+          runId,
+          source: "resume",
+          timestamp: (options.now?.() ?? new Date()).toISOString(),
+        });
+
         return {
           sessionId,
           runId,
@@ -155,6 +188,14 @@ export function createBabysitterToolHandlers(
       async execute(args, context) {
         const sessionId = resolveSessionId(context);
         const state = runtime.associateRun(sessionId, args.runId);
+        if (state.runId) {
+          await emitRunStartIfPossible(options.onRunStart, {
+            sessionId,
+            runId: state.runId,
+            source: "associate",
+            timestamp: (options.now?.() ?? new Date()).toISOString(),
+          });
+        }
         return {
           sessionId,
           runId: state.runId ?? args.runId,
@@ -237,7 +278,7 @@ export function createBabysitterToolHandlers(
     },
     babysitter_score: {
       description: "Compute weighted quality convergence score",
-      async execute(args) {
+      async execute(args, context) {
         if (!Array.isArray(args.criteria) || args.criteria.length === 0) {
           throw new Error("criteria must contain at least one item");
         }
@@ -268,15 +309,61 @@ export function createBabysitterToolHandlers(
         const rounded = Math.round(weightedScore);
         const threshold = args.passThreshold === undefined ? 80 : Math.max(0, Math.min(100, Math.round(args.passThreshold)));
 
-        return {
+        const result = {
           score: rounded,
           passed: rounded >= threshold,
           threshold,
           breakdown: normalized,
         };
+
+        const scoreSessionId =
+          typeof context.sessionID === "string" && context.sessionID.trim()
+            ? context.sessionID.trim()
+            : typeof context.sessionId === "string" && context.sessionId.trim()
+              ? context.sessionId.trim()
+              : undefined;
+
+        await emitScoreIfPossible(options.onScore, {
+          sessionId: scoreSessionId,
+          score: result.score,
+          threshold: result.threshold,
+          passed: result.passed,
+          breakdown: result.breakdown,
+          timestamp: (options.now?.() ?? new Date()).toISOString(),
+        });
+
+        return result;
       },
     },
   };
+}
+
+async function emitRunStartIfPossible(
+  callback: ((event: RunStartEvent) => Promise<void>) | undefined,
+  event: RunStartEvent
+): Promise<void> {
+  if (!callback) {
+    return;
+  }
+  try {
+    await callback(event);
+  } catch {
+    // Never fail tool execution because telemetry callback failed.
+  }
+}
+
+async function emitScoreIfPossible(
+  callback: ((event: ScoreEvent) => Promise<void>) | undefined,
+  event: ScoreEvent
+): Promise<void> {
+  if (!callback) {
+    return;
+  }
+  try {
+    await callback(event);
+  } catch {
+    // Never fail tool execution because telemetry callback failed.
+  }
 }
 
 export function resolveSessionId(context: ToolContextLike): string {

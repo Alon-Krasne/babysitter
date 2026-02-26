@@ -15,9 +15,12 @@ Hook failures are recorded but do not abort orchestration.
 
 - `on-iteration-start`
 - `on-iteration-end`
+- `on-run-start`
 - `on-run-complete`
 - `on-run-fail`
+- `on-score`
 - `on-step-dispatch`
+- `on-breakpoint`
 - `on-task-start`
 - `on-task-complete`
 - `on-task-fail`

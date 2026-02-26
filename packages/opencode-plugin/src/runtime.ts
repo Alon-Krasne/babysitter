@@ -121,6 +121,15 @@ export function createBabysitterRuntime(options: BabysitterRuntimeOptions): Baby
                   sessionId,
                   timestamp: (options.now?.() ?? new Date()).toISOString(),
                 });
+
+                if (taskEvent.kind === "breakpoint") {
+                  await dispatchHookIfAvailable(options.hookDispatcher, "on-breakpoint", {
+                    runId: taskEvent.runId,
+                    effectId: taskEvent.effectId,
+                    sessionId,
+                    timestamp: (options.now?.() ?? new Date()).toISOString(),
+                  });
+                }
                 return;
               }
 
