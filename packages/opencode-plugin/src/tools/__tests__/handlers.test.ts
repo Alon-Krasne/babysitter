@@ -99,4 +99,65 @@ describe("createBabysitterToolHandlers", () => {
     expect(result).toEqual({ sessionId: "session-1", stopped: true });
     expect(runtime.sessions.get("session-1")).toBeUndefined();
   });
+
+  it("prompts user through babysitter_ask when ask handler exists", async () => {
+    const runtime = createBabysitterRuntime({
+      client: { session: { prompt: vi.fn().mockResolvedValue(undefined) } },
+    });
+    const askUser = vi.fn().mockResolvedValue({ status: "answered", answer: "yes" });
+    const handlers = createBabysitterToolHandlers(runtime, { askUser });
+
+    const result = await handlers.babysitter_ask.execute(
+      {
+        question: "Proceed with this plan?",
+        title: "Approval",
+        choices: ["yes", "no"],
+      },
+      { sessionID: "session-1" }
+    );
+
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(askUser).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      question: "Proceed with this plan?",
+      title: "Approval",
+      choices: ["yes", "no"],
+    });
+    expect(result).toEqual({
+      sessionId: "session-1",
+      status: "answered",
+      answer: "yes",
+      question: "Proceed with this plan?",
+    });
+  });
+
+  it("computes weighted score via babysitter_score", async () => {
+    const runtime = createBabysitterRuntime({
+      client: { session: { prompt: vi.fn().mockResolvedValue(undefined) } },
+    });
+    const handlers = createBabysitterToolHandlers(runtime);
+
+    const result = await handlers.babysitter_score.execute(
+      {
+        criteria: [
+          { name: "correctness", score: 90, weight: 2 },
+          { name: "tests", score: 80, weight: 1 },
+          { name: "scope", score: 70, weight: 1 },
+        ],
+        passThreshold: 82,
+      },
+      { sessionID: "session-1" }
+    );
+
+    expect(result).toEqual({
+      score: 83,
+      passed: true,
+      threshold: 82,
+      breakdown: [
+        { name: "correctness", score: 90, weight: 2 },
+        { name: "tests", score: 80, weight: 1 },
+        { name: "scope", score: 70, weight: 1 },
+      ],
+    });
+  });
 });

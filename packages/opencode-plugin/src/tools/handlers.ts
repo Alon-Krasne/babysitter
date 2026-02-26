@@ -32,6 +32,42 @@ export interface StopArgs {
   sessionId?: string;
 }
 
+export interface AskArgs {
+  question: string;
+  title?: string;
+  choices?: string[];
+}
+
+export interface AskUserRequest {
+  sessionId: string;
+  question: string;
+  title?: string;
+  choices?: string[];
+}
+
+export interface AskUserResponse {
+  status: "prompted" | "answered";
+  answer?: string;
+}
+
+export interface ScoreCriterion {
+  name: string;
+  score: number;
+  weight?: number;
+}
+
+export interface ScoreArgs {
+  criteria: ScoreCriterion[];
+  passThreshold?: number;
+}
+
+export interface ScoreResult {
+  score: number;
+  passed: boolean;
+  threshold: number;
+  breakdown: Array<{ name: string; score: number; weight: number }>;
+}
+
 type CliStatusProvider = Pick<{
   runStatus(runId: string, cwd?: string): Promise<RunStatusResult>;
 }, "runStatus">;
@@ -47,11 +83,17 @@ export interface BabysitterToolHandlers {
   babysitter_associate: ToolDefinition<AssociateArgs, { sessionId: string; runId: string }>;
   babysitter_status: ToolDefinition<StatusArgs, Record<string, unknown>>;
   babysitter_stop: ToolDefinition<StopArgs, { sessionId: string; stopped: boolean }>;
+  babysitter_ask: ToolDefinition<AskArgs, { sessionId: string; status: string; answer?: string; question: string }>;
+  babysitter_score: ToolDefinition<ScoreArgs, ScoreResult>;
 }
 
 export function createBabysitterToolHandlers(
   runtime: BabysitterRuntime,
-  options: { cli?: CliStatusProvider; now?: () => Date } = {}
+  options: {
+    cli?: CliStatusProvider;
+    now?: () => Date;
+    askUser?: (request: AskUserRequest) => Promise<AskUserResponse>;
+  } = {}
 ): BabysitterToolHandlers {
   return {
     babysitter_setup: {
@@ -158,6 +200,79 @@ export function createBabysitterToolHandlers(
         return {
           sessionId,
           stopped,
+        };
+      },
+    },
+    babysitter_ask: {
+      description: "Ask the user an orchestration question",
+      async execute(args, context) {
+        const sessionId = resolveSessionId(context);
+        const question = args.question.trim();
+        if (!question) {
+          throw new Error("question must be a non-empty string");
+        }
+
+        if (!options.askUser) {
+          return {
+            sessionId,
+            status: "prompted",
+            question,
+          };
+        }
+
+        const response = await options.askUser({
+          sessionId,
+          question,
+          title: args.title?.trim() || undefined,
+          choices: Array.isArray(args.choices) ? args.choices.filter((choice) => typeof choice === "string" && choice.trim()) : undefined,
+        });
+
+        return {
+          sessionId,
+          status: response.status,
+          answer: response.answer,
+          question,
+        };
+      },
+    },
+    babysitter_score: {
+      description: "Compute weighted quality convergence score",
+      async execute(args) {
+        if (!Array.isArray(args.criteria) || args.criteria.length === 0) {
+          throw new Error("criteria must contain at least one item");
+        }
+
+        const normalized = args.criteria.map((criterion) => {
+          const name = criterion.name.trim();
+          if (!name) {
+            throw new Error("criterion name must be a non-empty string");
+          }
+          const score = Number(criterion.score);
+          if (!Number.isFinite(score)) {
+            throw new Error(`criterion score must be numeric (${name})`);
+          }
+          const clampedScore = Math.max(0, Math.min(100, score));
+          const rawWeight = criterion.weight === undefined ? 1 : Number(criterion.weight);
+          if (!Number.isFinite(rawWeight) || rawWeight <= 0) {
+            throw new Error(`criterion weight must be > 0 (${name})`);
+          }
+          return {
+            name,
+            score: clampedScore,
+            weight: rawWeight,
+          };
+        });
+
+        const totalWeight = normalized.reduce((acc, item) => acc + item.weight, 0);
+        const weightedScore = normalized.reduce((acc, item) => acc + item.score * item.weight, 0) / totalWeight;
+        const rounded = Math.round(weightedScore);
+        const threshold = args.passThreshold === undefined ? 80 : Math.max(0, Math.min(100, Math.round(args.passThreshold)));
+
+        return {
+          score: rounded,
+          passed: rounded >= threshold,
+          threshold,
+          breakdown: normalized,
         };
       },
     },

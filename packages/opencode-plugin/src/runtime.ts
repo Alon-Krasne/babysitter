@@ -1,9 +1,12 @@
 import { BabysitterCli, RunStatusResult } from "./cli/babysitterCli";
+import type { HookDispatcher } from "./hooks/dispatcher";
 import { evaluateIdleLoop, IdleLoopAction } from "./loop/idleLoop";
 import {
+  AgentRunner,
   BreakpointClient,
   NativeOrchestratorAction,
   NodeRunner,
+  SkillRunner,
   runNativeOrchestrator,
 } from "./orchestrator/nativeOrchestrator";
 import { SessionState, SessionStateStore, StartSessionOptions } from "./state/sessionState";
@@ -35,8 +38,11 @@ export interface BabysitterRuntimeOptions {
   worktree?: string;
   maxAutoRunnable?: number;
   nodeRunner?: NodeRunner;
+  skillRunner?: SkillRunner;
+  agentRunner?: AgentRunner;
   breakpoints?: BreakpointClient;
   breakpointPollIntervalSeconds?: number;
+  hookDispatcher?: Pick<HookDispatcher, "dispatch">;
   now?: () => Date;
 }
 
@@ -84,6 +90,14 @@ export function createBabysitterRuntime(options: BabysitterRuntimeOptions): Baby
       let runStatus: RunStatusResult | undefined;
       let nativeDecision: NativeOrchestratorAction | undefined;
       if (current.runId && options.cli) {
+        const eventTimestamp = options.now?.() ?? new Date();
+        await dispatchHookIfAvailable(options.hookDispatcher, "on-iteration-start", {
+          runId: current.runId,
+          iteration: current.iteration,
+          sessionId,
+          timestamp: eventTimestamp.toISOString(),
+        });
+
         if (supportsNativeOrchestrator(options.cli) && options.worktree) {
           nativeDecision = await runNativeOrchestrator({
             runId: current.runId,
@@ -91,8 +105,55 @@ export function createBabysitterRuntime(options: BabysitterRuntimeOptions): Baby
             cli: options.cli,
             maxAutoRunnable: options.maxAutoRunnable,
             nodeRunner: options.nodeRunner,
+            skillRunner: options.skillRunner,
+            agentRunner: options.agentRunner,
             breakpoints: options.breakpoints,
             breakpointPollIntervalSeconds: options.breakpointPollIntervalSeconds,
+            onTaskEvent: async (taskEvent) => {
+              if (taskEvent.phase === "start") {
+                await dispatchHookIfAvailable(options.hookDispatcher, "on-task-start", {
+                  runId: taskEvent.runId,
+                  effectId: taskEvent.effectId,
+                  kind: taskEvent.kind,
+                  status: taskEvent.status ?? null,
+                  message: taskEvent.message ?? null,
+                  sessionId,
+                  timestamp: (options.now?.() ?? new Date()).toISOString(),
+                });
+                return;
+              }
+
+              await dispatchHookIfAvailable(options.hookDispatcher, "on-task-complete", {
+                runId: taskEvent.runId,
+                effectId: taskEvent.effectId,
+                kind: taskEvent.kind,
+                status: taskEvent.status ?? null,
+                message: taskEvent.message ?? null,
+                sessionId,
+                timestamp: (options.now?.() ?? new Date()).toISOString(),
+              });
+
+              if (taskEvent.phase === "fail") {
+                await dispatchHookIfAvailable(options.hookDispatcher, "on-task-fail", {
+                  runId: taskEvent.runId,
+                  effectId: taskEvent.effectId,
+                  kind: taskEvent.kind,
+                  status: taskEvent.status ?? "error",
+                  message: taskEvent.message ?? null,
+                  sessionId,
+                  timestamp: (options.now?.() ?? new Date()).toISOString(),
+                });
+              }
+            },
+          });
+
+          await dispatchHookIfAvailable(options.hookDispatcher, "on-step-dispatch", {
+            runId: current.runId,
+            iteration: current.iteration,
+            sessionId,
+            action: nativeDecision.action,
+            reason: nativeDecision.reason,
+            timestamp: (options.now?.() ?? new Date()).toISOString(),
           });
           await logIfAvailable(options.client, "debug", "Native orchestrator decision", {
             sessionId,
@@ -102,6 +163,33 @@ export function createBabysitterRuntime(options: BabysitterRuntimeOptions): Baby
         }
 
         runStatus = await options.cli.runStatus(current.runId, options.worktree);
+
+        await dispatchHookIfAvailable(options.hookDispatcher, "on-iteration-end", {
+          runId: current.runId,
+          iteration: current.iteration,
+          sessionId,
+          timestamp: (options.now?.() ?? new Date()).toISOString(),
+          status: deriveIterationStatus(nativeDecision, runStatus),
+          action: nativeDecision?.action ?? null,
+          reason: nativeDecision?.reason ?? null,
+          runState: runStatus.state,
+        });
+
+        if (runStatus.state === "completed") {
+          await dispatchHookIfAvailable(options.hookDispatcher, "on-run-complete", {
+            runId: current.runId,
+            sessionId,
+            iteration: current.iteration,
+            timestamp: (options.now?.() ?? new Date()).toISOString(),
+          });
+        } else if (runStatus.state === "failed") {
+          await dispatchHookIfAvailable(options.hookDispatcher, "on-run-fail", {
+            runId: current.runId,
+            sessionId,
+            iteration: current.iteration,
+            timestamp: (options.now?.() ?? new Date()).toISOString(),
+          });
+        }
       }
 
       const action = evaluateIdleLoop({
@@ -139,6 +227,41 @@ export function createBabysitterRuntime(options: BabysitterRuntimeOptions): Baby
   };
 }
 
+function deriveIterationStatus(
+  decision: NativeOrchestratorAction | undefined,
+  runStatus: RunStatusResult | undefined
+): "executed" | "waiting" | "completed" | "failed" | "none" {
+  if (runStatus?.state === "completed") return "completed";
+  if (runStatus?.state === "failed") return "failed";
+  if (!decision) return "none";
+  if (
+    decision.action === "executed-tasks" ||
+    decision.action === "executed-breakpoints" ||
+    decision.action === "executed-skills" ||
+    decision.action === "executed-agents"
+  ) {
+    return "executed";
+  }
+  if (decision.action === "waiting" || decision.action === "invoke-skills" || decision.action === "invoke-agents") return "waiting";
+  return "none";
+}
+
+async function dispatchHookIfAvailable(
+  dispatcher: Pick<HookDispatcher, "dispatch"> | undefined,
+  hookName: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  if (!dispatcher) {
+    return;
+  }
+
+  try {
+    await dispatcher.dispatch(hookName, payload);
+  } catch {
+    // Hook failures should not interrupt orchestration.
+  }
+}
+
 function buildOrchestratorHint(decision?: NativeOrchestratorAction): string | null {
   if (!decision) {
     return null;
@@ -150,6 +273,14 @@ function buildOrchestratorHint(decision?: NativeOrchestratorAction): string | nu
 
   if (decision.action === "executed-breakpoints") {
     return `Native orchestrator processed ${decision.count} breakpoint task(s) and posted results.`;
+  }
+
+  if (decision.action === "executed-skills") {
+    return `Native orchestrator executed ${decision.count} skill task(s) and posted results.`;
+  }
+
+  if (decision.action === "executed-agents") {
+    return `Native orchestrator executed ${decision.count} agent task(s) and posted results.`;
   }
 
   if (decision.action === "waiting") {

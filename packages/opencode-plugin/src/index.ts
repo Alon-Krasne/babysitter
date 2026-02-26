@@ -7,6 +7,15 @@ export type { IdleLoopAction, RunStatusSnapshot } from "./loop/idleLoop";
 export { evaluateRunawayGuard } from "./loop/runawayGuard";
 export type { RunawayGuardInput, RunawayGuardResult } from "./loop/runawayGuard";
 
+export { HookDispatcher } from "./hooks/dispatcher";
+export type {
+  HookDispatchPayload,
+  HookExecutionResult,
+  HookDispatchResult,
+  HookDispatcherOptions,
+  HookCommandRunner,
+} from "./hooks/dispatcher";
+
 export { BabysitterCli, SpawnCommandExecutor } from "./cli/babysitterCli";
 export type {
   RunStatusResult,
@@ -24,6 +33,10 @@ export type {
   NativeOrchestratorAction,
   NativeOrchestratorOptions,
   NodeRunner,
+  SkillRunner,
+  AgentRunner,
+  DelegatedTaskInput,
+  DelegatedTaskResult,
   BreakpointClient,
   BreakpointCreateInput,
   BreakpointContextFile,
@@ -49,6 +62,12 @@ export type {
   AssociateArgs,
   StatusArgs,
   StopArgs,
+  AskArgs,
+  AskUserRequest,
+  AskUserResponse,
+  ScoreCriterion,
+  ScoreArgs,
+  ScoreResult,
   BabysitterToolHandlers,
 } from "./tools/handlers";
 

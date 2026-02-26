@@ -1,7 +1,7 @@
 ---
 name: babysit
 description: Orchestrate via babysitter. Use this skill to run complex workflows to completion.
-allowed-tools: Read, Grep, Write, Task, Bash, Edit, Glob, WebFetch, TodoWrite, Skill, babysitter_setup, babysitter_resume, babysitter_associate, babysitter_status, babysitter_stop
+allowed-tools: Read, Grep, Write, Task, Bash, Edit, Glob, WebFetch, TodoWrite, Skill, babysitter_setup, babysitter_resume, babysitter_associate, babysitter_status, babysitter_stop, babysitter_ask, babysitter_score
 version: 0.1.0
 ---
 

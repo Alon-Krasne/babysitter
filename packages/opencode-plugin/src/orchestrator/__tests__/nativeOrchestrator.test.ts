@@ -214,6 +214,58 @@ describe("runNativeOrchestrator", () => {
     });
   });
 
+  it("executes skill tasks via skill runner and posts results", async () => {
+    const runId = "run-skills";
+    const effectId = "ef-skill-1";
+    const runDir = path.join(worktree, ".a5c", "runs", runId);
+    const taskDir = path.join(runDir, "tasks", effectId);
+    await fs.mkdir(taskDir, { recursive: true });
+    await fs.writeFile(path.join(taskDir, "inputs.json"), JSON.stringify({ topic: "hooks" }), "utf8");
+    await fs.writeFile(
+      path.join(taskDir, "task.json"),
+      JSON.stringify(
+        {
+          kind: "skill",
+          skill: { name: "babysitter-score" },
+          inputsRef: `tasks/${effectId}/inputs.json`,
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const cli = new FakeCli("waiting", [
+      { effectId, kind: "skill", taskDefRef: `tasks/${effectId}/task.json`, inputsRef: `tasks/${effectId}/inputs.json` },
+    ]);
+    const skillRunner = {
+      run: async () => ({
+        status: "ok" as const,
+        value: { score: 92 },
+        stdout: "runner ok",
+      }),
+    };
+
+    const action = await runNativeOrchestrator({
+      runId,
+      worktree,
+      cli,
+      skillRunner,
+    });
+
+    expect(action).toEqual({
+      action: "executed-skills",
+      count: 1,
+      reason: "skill-tasks-processed",
+    });
+    expect(cli.postCalls).toHaveLength(1);
+    expect(cli.postCalls[0]?.options).toMatchObject({
+      status: "ok",
+      valueRef: `tasks/${effectId}/result.json`,
+      stdoutRef: `tasks/${effectId}/stdout.log`,
+    });
+  });
+
   it("returns invoke-agents action for pending agent tasks", async () => {
     const runId = "run-agents";
     const effectId = "ef-agent-1";
@@ -246,6 +298,57 @@ describe("runNativeOrchestrator", () => {
       reason: "agent-tasks-pending",
       agents: [{ effectId, label: "review", agentName: "code-reviewer", kind: "agent" }],
       instructions: "Use the Task tool to delegate each agent task, then post task results via task:post.",
+    });
+  });
+
+  it("executes agent tasks via agent runner and posts error payload", async () => {
+    const runId = "run-agent-exec";
+    const effectId = "ef-agent-2";
+    const runDir = path.join(worktree, ".a5c", "runs", runId);
+    const taskDir = path.join(runDir, "tasks", effectId);
+    await fs.mkdir(taskDir, { recursive: true });
+    await fs.writeFile(path.join(taskDir, "inputs.json"), JSON.stringify({ scope: "api" }), "utf8");
+    await fs.writeFile(
+      path.join(taskDir, "task.json"),
+      JSON.stringify(
+        {
+          kind: "agent",
+          agent: { name: "api-reviewer" },
+          inputsRef: `tasks/${effectId}/inputs.json`,
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const cli = new FakeCli("waiting", [
+      { effectId, kind: "agent", taskDefRef: `tasks/${effectId}/task.json`, inputsRef: `tasks/${effectId}/inputs.json` },
+    ]);
+    const agentRunner = {
+      run: async () => ({
+        status: "error" as const,
+        error: { name: "AgentError", message: "missing approval" },
+        stderr: "runner err",
+      }),
+    };
+
+    const action = await runNativeOrchestrator({
+      runId,
+      worktree,
+      cli,
+      agentRunner,
+    });
+
+    expect(action).toEqual({
+      action: "executed-agents",
+      count: 1,
+      reason: "agent-tasks-processed",
+    });
+    expect(cli.postCalls).toHaveLength(1);
+    expect(cli.postCalls[0]?.options).toMatchObject({
+      status: "error",
+      stderrRef: `tasks/${effectId}/stderr.log`,
     });
   });
 
@@ -295,11 +398,15 @@ describe("runNativeOrchestrator", () => {
         inputsRef: `tasks/${effectId}/inputs.json`,
       },
     ]);
+    const taskEvents: Array<{ phase: string; effectId: string; kind: string; status?: string }> = [];
 
     const action = await runNativeOrchestrator({
       runId,
       worktree,
       cli,
+      onTaskEvent: async (event) => {
+        taskEvents.push({ phase: event.phase, effectId: event.effectId, kind: event.kind, status: event.status });
+      },
     });
 
     expect(action).toEqual({
@@ -322,6 +429,10 @@ describe("runNativeOrchestrator", () => {
 
     const outputRaw = await fs.readFile(path.join(effectDir, "result.json"), "utf8");
     expect(JSON.parse(outputRaw)).toEqual({ sum: 5 });
+    expect(taskEvents).toEqual([
+      { phase: "start", effectId, kind: "node", status: undefined },
+      { phase: "complete", effectId, kind: "node", status: "ok" },
+    ]);
   });
 
   it("posts error when node task definition is missing", async () => {

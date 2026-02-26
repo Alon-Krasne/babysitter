@@ -141,6 +141,7 @@ describe("createBabysitterRuntime", () => {
 
       const postCalls: unknown[] = [];
       const prompt = vi.fn().mockResolvedValue(undefined);
+      const dispatch = vi.fn().mockResolvedValue({ hookName: "x", results: [] });
       const runStatus = vi
         .fn()
         .mockResolvedValueOnce({ state: "waiting" })
@@ -166,6 +167,9 @@ describe("createBabysitterRuntime", () => {
           taskListPending,
           taskPost,
         },
+        hookDispatcher: {
+          dispatch,
+        },
         worktree,
         now: () => new Date("2026-02-26T12:00:20.000Z"),
       });
@@ -186,6 +190,9 @@ describe("createBabysitterRuntime", () => {
         status: "ok",
         valueRef: `tasks/${effectId}/result.json`,
       });
+      const calledHooks = dispatch.mock.calls.map((call) => call[0]);
+      expect(calledHooks).toContain("on-task-start");
+      expect(calledHooks).toContain("on-task-complete");
     } finally {
       await fs.rm(worktree, { recursive: true, force: true });
     }
@@ -234,6 +241,71 @@ describe("createBabysitterRuntime", () => {
       expect(prompt).toHaveBeenCalledTimes(1);
       expect(prompt.mock.calls[0]?.[0]?.body?.parts?.[0]?.text).toContain("Skill tasks pending");
       expect(prompt.mock.calls[0]?.[0]?.body?.parts?.[0]?.text).toContain("Use the Skill tool");
+    } finally {
+      await fs.rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it("injects orchestrator hint after executing skill tasks", async () => {
+    const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "babysitter-opencode-runtime-skill-exec-"));
+    try {
+      const runId = "run-runtime-skill-exec";
+      const effectId = "ef-skill";
+      const runDir = path.join(worktree, ".a5c", "runs", runId);
+      const taskDir = path.join(runDir, "tasks", effectId);
+      await fs.mkdir(taskDir, { recursive: true });
+      await fs.writeFile(path.join(taskDir, "inputs.json"), JSON.stringify({ value: 1 }), "utf8");
+      await fs.writeFile(
+        path.join(taskDir, "task.json"),
+        JSON.stringify({ kind: "skill", inputsRef: `tasks/${effectId}/inputs.json` }, null, 2),
+        "utf8"
+      );
+
+      const prompt = vi.fn().mockResolvedValue(undefined);
+      const runStatus = vi
+        .fn()
+        .mockResolvedValueOnce({ state: "waiting" })
+        .mockResolvedValueOnce({ state: "waiting", pendingByKind: { skill: 1 } });
+      const taskListPending = vi.fn().mockResolvedValue([
+        {
+          effectId,
+          kind: "skill",
+          label: "analysis",
+          taskDefRef: `tasks/${effectId}/task.json`,
+          inputsRef: `tasks/${effectId}/inputs.json`,
+        },
+      ]);
+      const taskPost = vi.fn().mockResolvedValue(undefined);
+      const skillRunner = {
+        run: vi.fn().mockResolvedValue({ status: "ok", value: { done: true } }),
+      };
+
+      const runtime = createBabysitterRuntime({
+        client: {
+          session: { prompt },
+        },
+        cli: {
+          runStatus,
+          taskListPending,
+          taskPost,
+        },
+        worktree,
+        skillRunner,
+        now: () => new Date("2026-02-26T12:00:20.000Z"),
+      });
+
+      runtime.setupSession("session-1", {
+        prompt: "continue",
+        runId,
+        now: new Date("2026-02-26T12:00:00.000Z"),
+      });
+
+      const result = await runtime.onSessionIdle("session-1");
+
+      expect(result.type).toBe("prompt");
+      expect(skillRunner.run).toHaveBeenCalledTimes(1);
+      expect(taskPost).toHaveBeenCalledTimes(1);
+      expect(prompt.mock.calls[0]?.[0]?.body?.parts?.[0]?.text).toContain("executed 1 skill task");
     } finally {
       await fs.rm(worktree, { recursive: true, force: true });
     }
@@ -292,5 +364,36 @@ describe("createBabysitterRuntime", () => {
     } finally {
       await fs.rm(worktree, { recursive: true, force: true });
     }
+  });
+
+  it("dispatches lifecycle hooks around iteration and completion", async () => {
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const dispatch = vi.fn().mockResolvedValue({ hookName: "x", results: [] });
+    const runtime = createBabysitterRuntime({
+      client: {
+        session: { prompt },
+      },
+      cli: {
+        runStatus: vi.fn().mockResolvedValue({ state: "completed" }),
+      },
+      hookDispatcher: {
+        dispatch,
+      },
+      now: () => new Date("2026-02-26T12:00:20.000Z"),
+    });
+
+    runtime.setupSession("session-hooks", {
+      prompt: "continue",
+      runId: "run-hooks",
+      now: new Date("2026-02-26T12:00:00.000Z"),
+    });
+
+    const result = await runtime.onSessionIdle("session-hooks");
+
+    expect(result.type).toBe("deactivate");
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    expect(dispatch.mock.calls[0]?.[0]).toBe("on-iteration-start");
+    expect(dispatch.mock.calls[1]?.[0]).toBe("on-iteration-end");
+    expect(dispatch.mock.calls[2]?.[0]).toBe("on-run-complete");
   });
 });

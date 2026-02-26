@@ -14,7 +14,8 @@
     "dist",
     "skills",
     "commands",
-    "README.md"
+    "README.md",
+    "HOOKS.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

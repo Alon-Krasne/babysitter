@@ -76,6 +76,16 @@ export type NativeOrchestratorAction =
       reason: "breakpoints-processed";
     }
   | {
+      action: "executed-skills";
+      count: number;
+      reason: "skill-tasks-processed";
+    }
+  | {
+      action: "executed-agents";
+      count: number;
+      reason: "agent-tasks-processed";
+    }
+  | {
       action: "waiting";
       reason: "breakpoint-waiting" | "sleep-waiting";
       count?: number;
@@ -135,12 +145,51 @@ export interface NodeRunner {
   }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
+export interface DelegatedTaskInput {
+  runId: string;
+  effectId: string;
+  runDir: string;
+  task: TaskListEntry;
+  taskDefinition: NodeTaskDefinition;
+  inputRef: string;
+  inputPath: string;
+  outputRef: string;
+  outputPath: string;
+  input: unknown;
+}
+
+export interface DelegatedTaskResult {
+  status: "ok" | "error";
+  value?: unknown;
+  error?: unknown;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface SkillRunner {
+  run(input: DelegatedTaskInput): Promise<DelegatedTaskResult>;
+}
+
+export interface AgentRunner {
+  run(input: DelegatedTaskInput): Promise<DelegatedTaskResult>;
+}
+
 export interface NativeOrchestratorOptions {
   runId: string;
   worktree: string;
   cli: Pick<BabysitterCli, "runStatus" | "taskListPending" | "taskPost">;
   nodeRunner?: NodeRunner;
   breakpoints?: BreakpointClient;
+  skillRunner?: SkillRunner;
+  agentRunner?: AgentRunner;
+  onTaskEvent?: (event: {
+    phase: "start" | "complete" | "fail";
+    runId: string;
+    effectId: string;
+    kind: string;
+    status?: "ok" | "error";
+    message?: string;
+  }) => Promise<void>;
   breakpointPollIntervalSeconds?: number;
   maxAutoRunnable?: number;
 }
@@ -187,6 +236,7 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
         cli: options.cli,
         worktree,
         nodeRunner,
+        onTaskEvent: options.onTaskEvent,
       });
     }
 
@@ -210,6 +260,7 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
           worktree,
           breakpoints: options.breakpoints,
           intervalSeconds: options.breakpointPollIntervalSeconds,
+          onTaskEvent: options.onTaskEvent,
         });
       }
       return {
@@ -242,6 +293,28 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
 
   const skillTasks = pending.filter((task) => task.kind === "skill");
   if (skillTasks.length > 0) {
+    if (options.skillRunner) {
+      const runDir = path.join(worktree, ".a5c", "runs", runId);
+      for (const task of skillTasks) {
+        await executeDelegatedTask({
+          runId,
+          runDir,
+          task,
+          cli: options.cli,
+          worktree,
+          runner: options.skillRunner,
+          fallbackErrorMessage: "Skill task execution failed",
+          kind: "skill",
+          onTaskEvent: options.onTaskEvent,
+        });
+      }
+      return {
+        action: "executed-skills",
+        count: skillTasks.length,
+        reason: "skill-tasks-processed",
+      };
+    }
+
     const runDir = path.join(worktree, ".a5c", "runs", runId);
     const skills = await collectSkillInvocations(runDir, skillTasks);
     return {
@@ -255,6 +328,28 @@ export async function runNativeOrchestrator(options: NativeOrchestratorOptions):
 
   const agentTasks = pending.filter((task) => task.kind === "agent");
   if (agentTasks.length > 0) {
+    if (options.agentRunner) {
+      const runDir = path.join(worktree, ".a5c", "runs", runId);
+      for (const task of agentTasks) {
+        await executeDelegatedTask({
+          runId,
+          runDir,
+          task,
+          cli: options.cli,
+          worktree,
+          runner: options.agentRunner,
+          fallbackErrorMessage: "Agent task execution failed",
+          kind: "agent",
+          onTaskEvent: options.onTaskEvent,
+        });
+      }
+      return {
+        action: "executed-agents",
+        count: agentTasks.length,
+        reason: "agent-tasks-processed",
+      };
+    }
+
     const runDir = path.join(worktree, ".a5c", "runs", runId);
     const agents = await collectAgentInvocations(runDir, agentTasks);
     return {
@@ -314,7 +409,15 @@ async function executeNodeTask(input: {
   cli: RunStatusProvider & PendingTaskProvider & TaskPostProvider;
   worktree: string;
   nodeRunner: NodeRunner;
+  onTaskEvent?: NativeOrchestratorOptions["onTaskEvent"];
 }): Promise<void> {
+  await emitTaskEvent(input.onTaskEvent, {
+    phase: "start",
+    runId: input.runId,
+    effectId: input.task.effectId,
+    kind: "node",
+  });
+
   const taskDef = await loadTaskDefinition(input.runDir, input.task);
   if (!taskDef) {
     await input.cli.taskPost(
@@ -329,6 +432,14 @@ async function executeNodeTask(input: {
       },
       input.worktree
     );
+    await emitTaskEvent(input.onTaskEvent, {
+      phase: "fail",
+      runId: input.runId,
+      effectId: input.task.effectId,
+      kind: "node",
+      status: "error",
+      message: "Missing task definition",
+    });
     return;
   }
 
@@ -347,6 +458,14 @@ async function executeNodeTask(input: {
       },
       input.worktree
     );
+    await emitTaskEvent(input.onTaskEvent, {
+      phase: "fail",
+      runId: input.runId,
+      effectId: input.task.effectId,
+      kind: "node",
+      status: "error",
+      message: "Missing node.entry",
+    });
     return;
   }
 
@@ -403,6 +522,13 @@ async function executeNodeTask(input: {
       },
       input.worktree
     );
+    await emitTaskEvent(input.onTaskEvent, {
+      phase: "complete",
+      runId: input.runId,
+      effectId: input.task.effectId,
+      kind: "node",
+      status: "ok",
+    });
     return;
   }
 
@@ -430,6 +556,14 @@ async function executeNodeTask(input: {
     },
     input.worktree
   );
+  await emitTaskEvent(input.onTaskEvent, {
+    phase: "fail",
+    runId: input.runId,
+    effectId: input.task.effectId,
+    kind: "node",
+    status: "error",
+    message: errorMessage,
+  });
 }
 
 async function executeBreakpointTask(input: {
@@ -440,7 +574,15 @@ async function executeBreakpointTask(input: {
   worktree: string;
   breakpoints: BreakpointClient;
   intervalSeconds?: number;
+  onTaskEvent?: NativeOrchestratorOptions["onTaskEvent"];
 }): Promise<void> {
+  await emitTaskEvent(input.onTaskEvent, {
+    phase: "start",
+    runId: input.runId,
+    effectId: input.task.effectId,
+    kind: "breakpoint",
+  });
+
   const taskDef = await loadTaskDefinition(input.runDir, input.task);
   const io = resolveIoPaths(input.task.effectId, taskDef ?? {});
   const outputAbs = path.join(input.runDir, io.outputRef);
@@ -470,6 +612,13 @@ async function executeBreakpointTask(input: {
       },
       input.worktree
     );
+    await emitTaskEvent(input.onTaskEvent, {
+      phase: "complete",
+      runId: input.runId,
+      effectId: input.task.effectId,
+      kind: "breakpoint",
+      status: "ok",
+    });
   } catch (error) {
     await input.cli.taskPost(
       input.runId,
@@ -487,6 +636,171 @@ async function executeBreakpointTask(input: {
       },
       input.worktree
     );
+    await emitTaskEvent(input.onTaskEvent, {
+      phase: "fail",
+      runId: input.runId,
+      effectId: input.task.effectId,
+      kind: "breakpoint",
+      status: "error",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function executeDelegatedTask(input: {
+  runId: string;
+  runDir: string;
+  task: TaskListEntry;
+  cli: RunStatusProvider & PendingTaskProvider & TaskPostProvider;
+  worktree: string;
+  runner: SkillRunner | AgentRunner;
+  fallbackErrorMessage: string;
+  kind: "skill" | "agent";
+  onTaskEvent?: NativeOrchestratorOptions["onTaskEvent"];
+}): Promise<void> {
+  await emitTaskEvent(input.onTaskEvent, {
+    phase: "start",
+    runId: input.runId,
+    effectId: input.task.effectId,
+    kind: input.kind,
+  });
+
+  const taskDef = await loadTaskDefinition(input.runDir, input.task);
+  if (!taskDef) {
+    await input.cli.taskPost(
+      input.runId,
+      input.task.effectId,
+      {
+        status: "error",
+        errorPayload: {
+          name: "Error",
+          message: `Missing task definition for effect ${input.task.effectId}`,
+        },
+      },
+      input.worktree
+    );
+    await emitTaskEvent(input.onTaskEvent, {
+      phase: "fail",
+      runId: input.runId,
+      effectId: input.task.effectId,
+      kind: input.kind,
+      status: "error",
+      message: "Missing task definition",
+    });
+    return;
+  }
+
+  const io = resolveIoPaths(input.task.effectId, taskDef);
+  const inputAbs = path.join(input.runDir, io.inputRef);
+  const outputAbs = path.join(input.runDir, io.outputRef);
+  const stdoutAbs = path.join(input.runDir, io.stdoutRef);
+  const stderrAbs = path.join(input.runDir, io.stderrRef);
+
+  await ensureParentDirs([inputAbs, outputAbs, stdoutAbs, stderrAbs]);
+  await stageTaskInput({
+    runDir: input.runDir,
+    inputAbs,
+    taskDef,
+    fallbackInputsRef: input.task.inputsRef,
+  });
+
+  const stagedInput = await readJsonFile(inputAbs);
+
+  try {
+    const runResult = await input.runner.run({
+      runId: input.runId,
+      effectId: input.task.effectId,
+      runDir: input.runDir,
+      task: input.task,
+      taskDefinition: taskDef,
+      inputRef: io.inputRef,
+      inputPath: inputAbs,
+      outputRef: io.outputRef,
+      outputPath: outputAbs,
+      input: stagedInput,
+    });
+
+    const stdoutRef = runResult.stdout !== undefined ? io.stdoutRef : undefined;
+    const stderrRef = runResult.stderr !== undefined ? io.stderrRef : undefined;
+    if (runResult.stdout !== undefined) {
+      await fs.writeFile(stdoutAbs, runResult.stdout, "utf8");
+    }
+    if (runResult.stderr !== undefined) {
+      await fs.writeFile(stderrAbs, runResult.stderr, "utf8");
+    }
+
+    if (runResult.status === "ok") {
+      await fs.writeFile(outputAbs, `${JSON.stringify(runResult.value ?? {}, null, 2)}\n`, "utf8");
+      await input.cli.taskPost(
+        input.runId,
+        input.task.effectId,
+        {
+          status: "ok",
+          valueRef: io.outputRef,
+          stdoutRef,
+          stderrRef,
+        },
+        input.worktree
+      );
+      await emitTaskEvent(input.onTaskEvent, {
+        phase: "complete",
+        runId: input.runId,
+        effectId: input.task.effectId,
+        kind: input.kind,
+        status: "ok",
+      });
+      return;
+    }
+
+    await input.cli.taskPost(
+      input.runId,
+      input.task.effectId,
+      {
+        status: "error",
+        errorPayload:
+          runResult.error ?? {
+            name: "Error",
+            message: input.fallbackErrorMessage,
+            data: { effectId: input.task.effectId },
+          },
+        stdoutRef,
+        stderrRef,
+      },
+      input.worktree
+    );
+    await emitTaskEvent(input.onTaskEvent, {
+      phase: "fail",
+      runId: input.runId,
+      effectId: input.task.effectId,
+      kind: input.kind,
+      status: "error",
+      message: input.fallbackErrorMessage,
+    });
+  } catch (error) {
+    await input.cli.taskPost(
+      input.runId,
+      input.task.effectId,
+      {
+        status: "error",
+        errorPayload: {
+          name: "Error",
+          message: input.fallbackErrorMessage,
+          data: {
+            effectId: input.task.effectId,
+            cause: error instanceof Error ? error.message : String(error),
+          },
+        },
+      },
+      input.worktree
+    );
+    await emitTaskEvent(input.onTaskEvent, {
+      phase: "fail",
+      runId: input.runId,
+      effectId: input.task.effectId,
+      kind: input.kind,
+      status: "error",
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -613,6 +927,32 @@ async function loadTaskDefinition(runDir: string, task: TaskListEntry): Promise<
     return null;
   }
   return parsed as NodeTaskDefinition;
+}
+
+async function readJsonFile(filePath: string): Promise<unknown> {
+  const raw = await fs.readFile(filePath, "utf8");
+  return JSON.parse(raw) as unknown;
+}
+
+async function emitTaskEvent(
+  callback: NativeOrchestratorOptions["onTaskEvent"] | undefined,
+  event: {
+    phase: "start" | "complete" | "fail";
+    runId: string;
+    effectId: string;
+    kind: string;
+    status?: "ok" | "error";
+    message?: string;
+  }
+): Promise<void> {
+  if (!callback) {
+    return;
+  }
+  try {
+    await callback(event);
+  } catch {
+    // Ignore lifecycle callback failures.
+  }
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
