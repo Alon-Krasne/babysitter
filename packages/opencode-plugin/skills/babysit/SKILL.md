@@ -1,31 +1,45 @@
 ---
 name: babysit
 description: Orchestrate via babysitter. Use this skill to run complex workflows to completion.
-version: 0.2.0
+version: 0.3.0
 ---
 
 # babysit
 
-Orchestrate `.a5c/runs/<runId>/` through iterative execution using `@a5c-ai/babysitter-sdk`.
+Orchestrate `.a5c/runs/<runId>/` through iterative execution using the babysitter SDK CLI.
 
-## Dependencies
+## CLI Setup
 
-Make sure the babysitter CLI is available:
+The babysitter CLI is available from the local repo. Use `node` to invoke it:
 
 ```bash
-npm i -g @a5c-ai/babysitter@latest @a5c-ai/babysitter-sdk@latest
+BABYSITTER="node /Users/alonkrasne/Documents/Projects/babysitter/packages/babysitter/bin/babysitter.js"
 ```
 
-Use `babysitter` as the CLI command. All CLI commands take a `<runDir>` path
-(e.g., `.a5c/runs/my-run-id`), not a bare run ID.
+Use `$BABYSITTER` as the CLI command throughout. All CLI commands take a
+`<runDir>` path (e.g., `.a5c/runs/my-run-id`), not a bare run ID.
+
+## CRITICAL: Autonomous Loop Behavior
+
+**You MUST keep iterating until the run reaches a terminal state (`completed`
+or `failed`). Do NOT stop, pause, or ask for permission between iterations
+unless a breakpoint task explicitly requires it.**
+
+The orchestration loop is:
+1. `run:step` to advance the process
+2. If `waiting`: list pending effects, execute them, commit results
+3. Go back to step 1
+4. Stop ONLY when status is `completed` or `failed`
+
+**Never exit the loop early. Never ask "should I continue?" — just continue.**
 
 ## Core Iteration Workflow
 
-1. Step the run forward (`run:step <runDir> --json`)
-2. If status is `waiting`, list pending effects (`task:list <runDir> --pending --json`)
+1. Step the run forward (`$BABYSITTER run:step <runDir> --json`)
+2. If status is `waiting`, list pending effects (`$BABYSITTER task:list <runDir> --pending --json`)
 3. Execute pending effects (node scripts, agent tasks, skill tasks, breakpoints)
-4. Commit results (`task:run <runDir> <effectId> --json` for node tasks, or write result + use SDK `commitEffectResult` programmatically)
-5. Repeat from step 1
+4. Commit results (`$BABYSITTER task:run <runDir> <effectId> --json` for node tasks)
+5. **Go back to step 1 immediately — do not stop**
 
 ## 1) Create or find a process
 
@@ -37,16 +51,18 @@ Use `babysitter` as the CLI command. All CLI commands take a `<runDir>` path
 
 ### Process creation phase
 
-- Create process files (`.mjs` and companion config where needed) in `.a5c/processes`.
-- Follow existing SDK process conventions and references from process library files.
+- Create process files (`.mjs`) in `.a5c/processes`.
+- Follow existing SDK process conventions.
 - Explain process goals at high level to the user before executing runs.
+- Unless otherwise specified, prefer quality-gated, convergent processes
+  that close the widest feedback loop (e.g., e2e tests, full verification).
 
 ## 2) Setup
 
 ### Create a run
 
 ```bash
-babysitter run:create \
+$BABYSITTER run:create \
   --process-id <id> \
   --entry <path>#<export> \
   --inputs <inputs-file> \
@@ -60,7 +76,7 @@ babysitter run:create \
 Check status first:
 
 ```bash
-babysitter run:status .a5c/runs/<runId> --json
+$BABYSITTER run:status .a5c/runs/<runId> --json
 ```
 
 Then continue the iteration loop from step 3 below.
@@ -68,18 +84,18 @@ Then continue the iteration loop from step 3 below.
 ## 3) Step the run
 
 ```bash
-babysitter run:step .a5c/runs/<runId> --json
+$BABYSITTER run:step .a5c/runs/<runId> --json
 ```
 
 Statuses:
-- `waiting` — there are pending effects to execute
-- `completed` — the run finished successfully
-- `failed` — the run failed (inspect events for details)
+- `waiting` — there are pending effects to execute. **Continue immediately.**
+- `completed` — the run finished successfully. **You may stop.**
+- `failed` — the run failed. Inspect events, attempt recovery, then continue.
 
 ## 4) List pending effects
 
 ```bash
-babysitter task:list .a5c/runs/<runId> --pending --json
+$BABYSITTER task:list .a5c/runs/<runId> --pending --json
 ```
 
 Each effect has an `effectId`, `kind`, and `taskDefRef`.
@@ -88,18 +104,19 @@ Each effect has an `effectId`, `kind`, and `taskDefRef`.
 
 ### Node tasks (`kind: "node"`)
 
-The simplest path — let the CLI run and commit in one step:
+Let the CLI run and commit in one step:
 
 ```bash
-babysitter task:run .a5c/runs/<runId> <effectId> --json
+$BABYSITTER task:run .a5c/runs/<runId> <effectId> --json
 ```
 
 ### Agent tasks (`kind: "agent"`)
 
-Read the task definition from the `taskDefRef` path. It contains a prompt
-in `inputs.prompt`. Execute the prompt (you are the agent — do the work),
-then write the result to `tasks/<effectId>/result.json` in the run directory
-and commit it.
+Read the task definition from the `taskDefRef` path inside the run directory.
+It contains a prompt in `inputs.prompt`. **You are the agent — do the work
+described in the prompt.** Write code, run tests, fix bugs — whatever the
+prompt asks. Then write the result to `tasks/<effectId>/result.json` in the
+run directory and commit using `$BABYSITTER task:run`.
 
 ### Skill tasks (`kind: "skill"`)
 
@@ -108,17 +125,22 @@ and commit it.
 
 ### Breakpoints (`kind: "breakpoint"`)
 
-Ask the user for approval/input, then commit the response.
+This is the ONE case where you ask the user. Present the breakpoint question
+to the user, wait for their response, then commit it.
 
 ## 6) Repeat until terminal state
 
-- Continue step -> list -> execute -> commit until `run:status` returns `completed`.
-- If state is `failed`, inspect events and repair:
+**Go back to step 3 immediately after executing effects.** Continue the
+loop until `run:step` returns `completed` or `failed`.
+
+If `failed`, inspect events and attempt recovery:
 
 ```bash
-babysitter run:events .a5c/runs/<runId> --limit 50 --reverse --json
-babysitter run:rebuild-state .a5c/runs/<runId> --json
+$BABYSITTER run:events .a5c/runs/<runId> --limit 50 --reverse --json
+$BABYSITTER run:rebuild-state .a5c/runs/<runId> --json
 ```
+
+Then continue the loop.
 
 ## Task kinds
 
@@ -130,11 +152,21 @@ babysitter run:rebuild-state .a5c/runs/<runId> --json
 | `breakpoint` | Human approval | Ask the user |
 | `sleep` | Time gate | Wait until target time |
 
+## Process design guidance
+
+- Prefer quality-gated iterative development loops.
+- Close the widest feedback loop possible (e2e tests, full browser, etc.).
+- Include verification and refinement steps for planning, implementation,
+  integration, debugging, and refactoring phases.
+- Search for available skills and subagents before designing orchestration.
+
 ## Critical rules
 
+- **NEVER stop the loop unless the run is `completed` or `failed`.**
 - All CLI commands take `<runDir>` paths (`.a5c/runs/<runId>`), not bare IDs.
 - For node tasks, prefer `task:run` which executes and commits in one step.
-- Never write `tasks/<effectId>/result.json` directly without committing via the SDK.
-- Never bypass the CLI orchestration loop.
+- Never write `tasks/<effectId>/result.json` directly without committing.
+- Never build wrapper scripts to orchestrate runs — use the CLI directly.
 - In non-interactive flows, do not self-approve breakpoints.
-- Prefer quality-gated, convergent processes that verify the full user request.
+- If the run fails due to SDK issues or corrupted state, analyze the error
+  and journal events, recover state, and continue.
