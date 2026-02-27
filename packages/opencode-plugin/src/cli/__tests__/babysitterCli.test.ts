@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { promises as fs } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BabysitterCli, CommandExecutor, CommandRunOptions } from "../babysitterCli";
 
 describe("BabysitterCli", () => {
@@ -63,70 +66,115 @@ describe("BabysitterCli", () => {
     ]);
   });
 
-  it("posts successful task results with value ref", async () => {
-    const executor = createExecutor([{ exitCode: 0, stdout: '{"status":"ok"}\n', stderr: "" }]);
-    const cli = new BabysitterCli(executor);
+  describe("taskPost with SDK commitEffectResult", () => {
+    let tmpDir: string;
 
-    await cli.taskPost(
-      "run-1",
-      "ef-1",
-      {
-        status: "ok",
-        valueRef: "tasks/ef-1/result.json",
-        stdoutRef: "tasks/ef-1/stdout.log",
-      },
-      "/tmp/work"
-    );
-
-    expect(executor.calls).toHaveLength(1);
-    expect(executor.calls[0]).toEqual({
-      command: "babysitter",
-      args: [
-        "task:post",
-        "run-1",
-        "ef-1",
-        "--status",
-        "ok",
-        "--json",
-        "--value",
-        "tasks/ef-1/result.json",
-        "--stdout-ref",
-        "tasks/ef-1/stdout.log",
-      ],
-      options: { cwd: "/tmp/work" },
+    beforeEach(async () => {
+      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "babysitter-cli-taskpost-"));
     });
-  });
 
-  it("posts error task results through stdin payload", async () => {
-    const executor = createExecutor([{ exitCode: 0, stdout: '{"status":"error"}\n', stderr: "" }]);
-    const cli = new BabysitterCli(executor);
+    afterEach(async () => {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
 
-    await cli.taskPost(
-      "run-1",
-      "ef-1",
-      {
-        status: "error",
-        errorPayload: { name: "Error", message: "boom" },
-        stderrRef: "tasks/ef-1/stderr.log",
-      },
-      "/tmp/work"
-    );
+    async function setupRunWithPendingEffect(runId: string, effectId: string) {
+      const { createRunDir: createRunDirFn } = await import("@a5c-ai/babysitter-sdk/dist/storage/createRunDir.js");
+      const { appendEvent } = await import("@a5c-ai/babysitter-sdk/dist/storage/journal.js");
 
-    expect(executor.calls).toHaveLength(1);
-    expect(executor.calls[0].args).toEqual([
-      "task:post",
-      "run-1",
-      "ef-1",
-      "--status",
-      "error",
-      "--json",
-      "--error",
-      "-",
-      "--stderr-ref",
-      "tasks/ef-1/stderr.log",
-    ]);
-    expect(executor.calls[0].options?.cwd).toBe("/tmp/work");
-    expect(executor.calls[0].options?.input).toContain('"message":"boom"');
+      const runsDir = path.join(tmpDir, ".a5c", "runs");
+      const { runDir } = await createRunDirFn({
+        runsRoot: runsDir,
+        runId,
+        request: "test",
+        processPath: "/fake/process.js",
+        inputs: {},
+      });
+
+      // Journal: RUN_CREATED
+      await appendEvent({
+        runDir,
+        eventType: "RUN_CREATED",
+        event: { runId, processId: "test" },
+      });
+
+      // Journal: EFFECT_REQUESTED (so commitEffectResult can find it)
+      await appendEvent({
+        runDir,
+        eventType: "EFFECT_REQUESTED",
+        event: {
+          effectId,
+          invocationKey: `test:S000001:task-1`,
+          invocationHash: "abc123",
+          stepId: "S000001",
+          taskId: "task-1",
+          kind: "node",
+          label: "test-task",
+          taskDefRef: `tasks/${effectId}/task.json`,
+        },
+      });
+
+      return { runDir };
+    }
+
+    it("commits successful task result via SDK", async () => {
+      const runId = "test-run-ok";
+      const effectId = "ef-ok-1";
+      const { runDir } = await setupRunWithPendingEffect(runId, effectId);
+
+      const executor = createExecutor([]);
+      const cli = new BabysitterCli(executor);
+
+      await cli.taskPost(
+        runId,
+        effectId,
+        {
+          status: "ok",
+          valueRef: `tasks/${effectId}/result.json`,
+        },
+        tmpDir
+      );
+
+      // Verify EFFECT_RESOLVED was written to journal
+      const journalDir = path.join(runDir, "journal");
+      const journalFiles = await fs.readdir(journalDir);
+      const resolvedFiles = journalFiles.filter((f) => f.endsWith(".json"));
+      // Should have 3: RUN_CREATED, EFFECT_REQUESTED, EFFECT_RESOLVED
+      expect(resolvedFiles.length).toBe(3);
+
+      const lastFile = resolvedFiles.sort().pop()!;
+      const lastEvent = JSON.parse(await fs.readFile(path.join(journalDir, lastFile), "utf8"));
+      expect(lastEvent.type).toBe("EFFECT_RESOLVED");
+      expect(lastEvent.data.effectId).toBe(effectId);
+      expect(lastEvent.data.status).toBe("ok");
+    });
+
+    it("commits error task result via SDK", async () => {
+      const runId = "test-run-err";
+      const effectId = "ef-err-1";
+      const { runDir } = await setupRunWithPendingEffect(runId, effectId);
+
+      const executor = createExecutor([]);
+      const cli = new BabysitterCli(executor);
+
+      await cli.taskPost(
+        runId,
+        effectId,
+        {
+          status: "error",
+          errorPayload: { name: "Error", message: "boom" },
+        },
+        tmpDir
+      );
+
+      // Verify EFFECT_RESOLVED with error was written
+      const journalDir = path.join(runDir, "journal");
+      const journalFiles = (await fs.readdir(journalDir)).filter((f) => f.endsWith(".json")).sort();
+      const lastFile = journalFiles.pop()!;
+      const lastEvent = JSON.parse(await fs.readFile(path.join(journalDir, lastFile), "utf8"));
+      expect(lastEvent.type).toBe("EFFECT_RESOLVED");
+      expect(lastEvent.data.effectId).toBe(effectId);
+      expect(lastEvent.data.status).toBe("error");
+    });
   });
 });
 

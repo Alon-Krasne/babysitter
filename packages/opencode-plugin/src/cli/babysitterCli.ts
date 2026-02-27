@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
+import { promises as fs } from "node:fs";
 
 export interface CommandResult {
   exitCode: number;
@@ -57,7 +59,8 @@ export class BabysitterCli {
 
   async runStatus(runId: string, cwd?: string): Promise<RunStatusResult> {
     const normalizedRunId = normalizeNonEmpty(runId, "runId");
-    const parsed = await this.execJson(["run:status", normalizedRunId, "--json"], { cwd }, "run:status");
+    const runDir = resolveRunDir(normalizedRunId, cwd);
+    const parsed = await this.execJson(["run:status", runDir, "--json"], { cwd }, "run:status");
     if (typeof parsed.state !== "string") {
       throw new Error("Unable to parse babysitter run:status JSON output");
     }
@@ -77,7 +80,8 @@ export class BabysitterCli {
 
   async taskListPending(runId: string, cwd?: string): Promise<TaskListEntry[]> {
     const normalizedRunId = normalizeNonEmpty(runId, "runId");
-    const parsed = await this.execJson(["task:list", normalizedRunId, "--pending", "--json"], { cwd }, "task:list");
+    const runDir = resolveRunDir(normalizedRunId, cwd);
+    const parsed = await this.execJson(["task:list", runDir, "--pending", "--json"], { cwd }, "task:list");
     if (!Array.isArray(parsed.tasks)) {
       throw new Error("Unable to parse babysitter task:list JSON output");
     }
@@ -100,29 +104,64 @@ export class BabysitterCli {
     const normalizedRunId = normalizeNonEmpty(runId, "runId");
     const normalizedEffectId = normalizeNonEmpty(effectId, "effectId");
 
-    const args = ["task:post", normalizedRunId, normalizedEffectId, "--status", options.status, "--json"];
+    // Use SDK's commitEffectResult directly instead of CLI (the CLI
+    // does not expose a task:post command - it uses task:run which
+    // re-executes the task).
+    try {
+      const { commitEffectResult } = await import("@a5c-ai/babysitter-sdk/dist/runtime/commitEffectResult.js");
 
-    if (options.status === "ok") {
-      const valueRef = normalizeNonEmpty(options.valueRef, "valueRef");
-      args.push("--value", valueRef);
-      if (options.stdoutRef) args.push("--stdout-ref", options.stdoutRef);
-      if (options.stderrRef) args.push("--stderr-ref", options.stderrRef);
-      await this.execJson(args, { cwd }, "task:post");
-      return;
+      const runsDir = cwd
+        ? path.join(cwd, ".a5c", "runs")
+        : path.join(process.cwd(), ".a5c", "runs");
+      const runDir = path.join(runsDir, normalizedRunId);
+
+      const now = new Date().toISOString();
+
+      if (options.status === "ok") {
+        // Read the result value from the file the orchestrator wrote
+        let value: unknown;
+        if (options.valueRef) {
+          const valuePath = path.join(runDir, options.valueRef);
+          try {
+            const raw = await fs.readFile(valuePath, "utf8");
+            value = JSON.parse(raw);
+          } catch {
+            value = {};
+          }
+        }
+
+        await commitEffectResult({
+          runDir,
+          effectId: normalizedEffectId,
+          result: {
+            status: "ok",
+            value,
+            stdoutRef: options.stdoutRef,
+            stderrRef: options.stderrRef,
+            startedAt: now,
+            finishedAt: now,
+          },
+        });
+      } else {
+        await commitEffectResult({
+          runDir,
+          effectId: normalizedEffectId,
+          result: {
+            status: "error",
+            error: options.errorPayload ?? { name: "Error", message: "Task execution failed" },
+            stdoutRef: options.stdoutRef,
+            stderrRef: options.stderrRef,
+            startedAt: now,
+            finishedAt: now,
+          },
+        });
+      }
+    } catch (sdkError) {
+      // Fallback: try CLI task:run if SDK import fails (e.g., different SDK version)
+      throw new Error(
+        `Failed to commit effect result for ${normalizedEffectId}: ${sdkError instanceof Error ? sdkError.message : String(sdkError)}`
+      );
     }
-
-    args.push("--error", "-");
-    if (options.stdoutRef) args.push("--stdout-ref", options.stdoutRef);
-    if (options.stderrRef) args.push("--stderr-ref", options.stderrRef);
-
-    await this.execJson(
-      args,
-      {
-        cwd,
-        input: `${JSON.stringify(options.errorPayload ?? { name: "Error", message: "Task execution failed" })}\n`,
-      },
-      "task:post"
-    );
   }
 
   private async execJson(args: string[], options: CommandRunOptions, commandName: string): Promise<JsonRecord> {
@@ -174,6 +213,15 @@ export class SpawnCommandExecutor implements CommandExecutor {
       });
     });
   }
+}
+
+function resolveRunDir(runId: string, cwd?: string): string {
+  // If runId is already an absolute path, use it directly.
+  if (path.isAbsolute(runId)) {
+    return runId;
+  }
+  const base = cwd ?? process.cwd();
+  return path.join(base, ".a5c", "runs", runId);
 }
 
 function normalizeNonEmpty(value: string, name: string): string {
