@@ -1,20 +1,55 @@
-# Babysitter Plugin Adaptation Plan: Claude Code → OpenCode
+# Babysitter — OpenCode Plugin
 
-**Version:** 3.0
-**Date:** 2026-02-02
+**Version:** 3.1
+**Date:** 2026-02-27 (originally 2026-02-02)
 
 ---
 
 ## Executive Summary
 
-This document details the comprehensive plan for adapting the **babysitter** plugin from Claude Code to OpenCode.
+**Babysitter** is an orchestration system for agentic coding. It defines
+processes (task graphs in JS), manages runs, and tells an AI coding agent
+what to do next. The agent does the actual work — writing code, running
+tests, fixing bugs — and babysitter keeps it on track.
 
-**Key Findings:**
-- **Total Components:** 25+ core features across hooks, scripts, skills, commands
-- **Core Mechanism:** Stop hook → `session.idle` + `client.session.prompt()`
-- **Skills/Commands:** OpenCode supports both skills (SKILL.md) and commands, similar to Claude Code
+Until now, the only agent babysitter could drive was **Claude Code**. The
+Claude Code plugin (`plugins/babysitter/`) hooks into Claude Code's
+lifecycle, feeds it tasks from babysitter runs, and posts results back.
 
-The SDK CLI (`@a5c-ai/babysitter-sdk`) works identically in both environments.
+**This work adds OpenCode as a second agent that babysitter can drive.**
+
+A new plugin package (`packages/opencode-plugin/`) is a babysitter plugin
+that tells OpenCode what to do. It:
+- Hooks into OpenCode's `session.idle` events to keep it working
+- Registers babysitter tools so OpenCode can set up/manage runs
+- Executes pending tasks from babysitter processes (node scripts, agent
+  prompts, skill invocations, breakpoints)
+- Commits task results back to babysitter via the SDK
+
+The babysitter SDK and CLI are unchanged — they don't know or care which
+agent is doing the work. The plugin is the adapter layer between babysitter
+and the agent runtime.
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────┐
+│  Babysitter SDK (@a5c-ai/babysitter-sdk)        │
+│  Process engine, CLI, run storage               │
+│  Agent-agnostic — unchanged by this work        │
+└────────────┬────────────────────┬───────────────┘
+             │                    │
+    ┌────────▼────────┐  ┌───────▼─────────┐
+    │ Claude Code     │  │ OpenCode        │
+    │ Plugin          │  │ Plugin (NEW)    │
+    │ plugins/        │  │ packages/       │
+    │ babysitter/     │  │ opencode-plugin/│
+    └────────┬────────┘  └───────┬─────────┘
+             │                    │
+    ┌────────▼────────┐  ┌───────▼─────────┐
+    │ Claude Code     │  │ OpenCode        │
+    │ (does the work) │  │ (does the work) │
+    └─────────────────┘  └─────────────────┘
+```
 
 ---
 
@@ -169,7 +204,7 @@ event: async ({ event }) => {
 | Execution | Shell scripts | TypeScript functions |
 | Discovery | Multi-directory chain | Plugin-only |
 
-**Solution:** Implement hook dispatcher in TypeScript, support shell scripts via Bun.
+**Solution:** Implement hook dispatcher in TypeScript, execute shell scripts via Node `child_process.spawn`.
 
 #### 3. AskUserQuestion Tool
 
@@ -200,68 +235,60 @@ event: async ({ event }) => {
 
 ### Minor Gaps
 
-- Logging hooks → Use `client.app.log()`
-- State file persistence → Implement YAML frontmatter in TypeScript
+- Logging hooks → Callback-based event dispatch
+- State file persistence → JSON file at `.a5c/state/opencode-sessions.json`
 - Transcript access → Track via `tool.execute.after`
-- Shell script conversion → Use Bun `$` shell API
+- Shell script execution → Node `child_process.spawn` (not Bun)
 
 ---
 
 ## Plugin Structure Design
 
-### Directory Layout
+### Directory Layout (actual)
 
 ```
 @a5c-ai/babysitter-opencode/
 ├── package.json
 ├── tsconfig.json
+├── vitest.config.ts
+├── README.md
+├── HOOKS.md
 ├── src/
-│   ├── index.ts                    # Plugin entry point
+│   ├── index.ts                    # Public API exports
+│   ├── plugin.ts                   # createBabysitterPlugin() entry point
+│   ├── runtime.ts                  # createBabysitterRuntime(), session loop
+│   ├── cli/
+│   │   └── babysitterCli.ts        # SDK CLI wrappers (Node child_process + commitEffectResult)
 │   ├── hooks/
-│   │   ├── dispatcher.ts           # Hook discovery & execution
-│   │   ├── session.ts              # session.created, session.deleted
-│   │   ├── idle.ts                 # session.idle (in-session loop)
-│   │   ├── tools.ts                # tool.execute.after
-│   │   ├── on-iteration-start.ts   # Native orchestrator
-│   │   ├── on-iteration-end.ts     # Finalization
-│   │   ├── on-breakpoint.ts        # Breakpoint handler
-│   │   └── lifecycle.ts            # run/task lifecycle hooks
+│   │   └── dispatcher.ts           # Hook discovery & shell script execution
+│   ├── loop/
+│   │   ├── idleLoop.ts             # session.idle continuation logic
+│   │   └── runawayGuard.ts         # Iteration runaway detection
+│   ├── orchestrator/
+│   │   └── nativeOrchestrator.ts   # Task execution: node, agent, skill, breakpoint
+│   ├── breakpoints/
+│   │   ├── cliBreakpointClient.ts  # CLI-based breakpoint create/wait
+│   │   └── interactiveBreakpointHandler.ts  # In-session askUser breakpoints
+│   ├── convergence/
+│   │   └── qualityConvergenceLoop.ts  # score -> threshold -> improve loop
 │   ├── state/
-│   │   ├── session-state.ts        # In-memory state Map
-│   │   └── file-state.ts           # YAML frontmatter persistence
+│   │   └── sessionState.ts         # In-memory Map + JSON file persistence
 │   ├── tools/
-│   │   ├── setup.ts                # babysitter_setup
-│   │   ├── iterate.ts              # babysitter_iterate
-│   │   ├── task-post.ts            # babysitter_task_post
-│   │   ├── status.ts               # babysitter_status
-│   │   ├── stop.ts                 # babysitter_stop
-│   │   ├── ask-user.ts             # babysitter_ask (AskUserQuestion)
-│   │   └── score.ts                # babysitter_score
-│   ├── tasks/
-│   │   ├── node.ts                 # Node/script execution
-│   │   ├── agent.ts                # Agent task execution
-│   │   ├── skill.ts                # Skill invocation
-│   │   └── parallel.ts             # Parallel batching
-│   └── utils/
-│       ├── cli.ts                  # SDK CLI wrappers (Bun $)
-│       ├── frontmatter.ts          # YAML parsing
-│       └── prompt-builder.ts       # Continuation prompt builder
-├── hooks/                          # Configurable hook scripts
-│   ├── on-iteration-start/
-│   ├── on-iteration-end/
-│   ├── on-breakpoint/
-│   └── ...
+│   │   └── handlers.ts             # All 7 tools (setup, resume, associate, status, stop, ask, score)
+│   ├── runners/
+│   │   └── sessionRunners.ts       # Delegated skill/agent task execution
+│   └── plugin/
+│       ├── toolLifecycleHooks.ts   # tool.execute.after dispatch
+│       └── askResponseCoordinator.ts  # Ask-response blocking wait
 ├── skills/
 │   ├── babysit/
 │   │   └── SKILL.md                # Main orchestration skill
 │   └── babysitter-score/
 │       └── SKILL.md                # Scoring skill
-├── commands/
-│   ├── babysit.md                  # /babysit command
-│   └── babysit-resume.md           # /babysit-resume command
-└── docs/
-    ├── README.md
-    └── HOOKS.md
+└── commands/
+    ├── babysit.md                  # /babysit command
+    ├── babysit-resume.md           # /babysit-resume command
+    └── babysit-status.md           # /babysit-status command
 ```
 
 ---
@@ -432,10 +459,10 @@ if (event.type === "session.idle") {
 |----------|------------|
 | `hook-dispatcher.sh` | `src/hooks/dispatcher.ts` |
 
-**Discovery Order:**
-1. `.opencode/hooks/<hook-name>/` (per-repo)
-2. `~/.config/opencode/hooks/<hook-name>/` (per-user)
-3. Plugin `hooks/<hook-name>/` (built-in)
+**Discovery Order (actual):**
+1. `{worktree}/.a5c/hooks/<hook-name>/` (per-repo)
+2. `~/.config/babysitter/hooks/<hook-name>/` (per-user)
+3. `{pluginRoot}/hooks/<hook-name>/` (built-in, if pluginRoot configured)
 
 ### 4. Native Orchestrator
 
@@ -449,7 +476,7 @@ if (event.type === "session.idle") {
 - Execute auto-runnable tasks (kind="node")
 - Handle agent tasks (kind="agent") via `client.session.prompt()`
 - Handle skill tasks (kind="skill") via skill invocation
-- Call `task:post` to commit results
+- Commit results via SDK's `commitEffectResult` (not CLI — there is no `task:post` command)
 
 ### 5. Breakpoint Handler
 
@@ -479,7 +506,7 @@ Status legend: `[x]` completed, `[ ]` remaining.
 - [x] Plugin entry point with OpenCode API
 - [x] Session state management (Map + file)
 - [x] Basic tools and loop controls (`setup`, `resume`, `associate`, `status`, `stop`) plus iterate/task post via CLI wrappers
-- [x] SDK CLI wrappers (implemented via Node child process executor)
+- [x] SDK CLI wrappers (Node `child_process.spawn` for run:status/task:list; SDK `commitEffectResult` for task commit)
 - [x] Idle hook for auto-continuation
 - [x] Tool lifecycle dispatch via `tool.execute.after`
 
@@ -622,64 +649,61 @@ OpenCode plugin's `runNativeOrchestrator` + `BabysitterCli` adapter.
 
 | Claude Code | OpenCode |
 |-------------|----------|
-| Bash scripts | Bun `$` shell API |
-| `#!/bin/bash` | `import { $ } from "bun"` |
+| Bash scripts | Node `child_process.spawn` |
+| `#!/bin/bash` | Shell scripts executed via `spawn("bash", [scriptPath])` |
 
 ---
 
-## Testing Strategy
+## Testing Strategy (actual — 82 tests, 17 files)
 
 ### Unit Tests
-- State management (init, update, delete, persist)
-- YAML frontmatter parsing/serialization
-- Runaway detection algorithm
-- Prompt builder functions
-- Hook discovery
+- State management: init, update, delete, JSON file persistence (`sessionState.test.ts`, `sessionState.persistence.test.ts`)
+- Runaway detection algorithm (`runawayGuard.test.ts`)
+- Idle loop evaluation (`idleLoop.test.ts`)
+- CLI breakpoint client (`cliBreakpointClient.test.ts`)
+- Interactive breakpoint handler (`interactiveBreakpointHandler.test.ts`)
+- Quality convergence loop (`qualityConvergenceLoop.test.ts`)
 
 ### Integration Tests
-- Tool execution (all tools)
-- Idle hook continuation
-- SDK CLI command execution
-- Hook dispatcher with shell scripts
-- Skill invocation
+- Tool execution — all 7 tools (`handlers.test.ts`)
+- CLI adapter — run:status, task:list, task:post via SDK commitEffectResult (`babysitterCli.test.ts`)
+- Hook dispatcher with shell scripts (`dispatcher.test.ts`)
+- Tool lifecycle hooks (`toolLifecycleHooks.test.ts`)
+- Ask-response coordinator (`askResponseCoordinator.test.ts`)
+- Session runners (`sessionRunners.test.ts`)
+- Plugin integration (`plugin.integration.test.ts`)
 
 ### End-to-End Tests
-
-1. **Full Orchestration Loop**
-   - `/babysit` → interview → create run → iterate → complete
-
-2. **Resume Flow**
-   - `/babysit-resume <runId>` → continue → complete
-
-3. **Quality Convergence**
-   - Agent scoring → threshold check → improve → repeat
-
-4. **Breakpoint Approval**
-   - Trigger breakpoint → user interaction → continue
+- Native orchestrator full loop — pending tasks → node execution → commit → iterate (`nativeOrchestrator.test.ts`)
+- Runtime session loop (`runtime.test.ts`)
+- Multi-iteration loop (`e2eLoop.test.ts`)
+- **Real babysitter run** — hello-world process with scaffold + verify tasks, run to completion (`../test-babysitter/run-e2e.mjs`)
 
 ---
 
 ## Conclusion
 
-The babysitter plugin adaptation to OpenCode is feasible using:
+The OpenCode plugin is implemented and E2E validated. Babysitter can now
+drive OpenCode as its agent runtime using the same process definitions
+that work with Claude Code.
+
+**What was built:**
 - `session.idle` + `client.session.prompt()` for in-session loop
-- Same SKILL.md format for skills
-- OpenCode command format for slash commands
+- 7 custom tools matching the Claude Code plugin's tool surface
+- Hook dispatcher with shell script execution (same discovery order)
+- Native orchestrator executing node/agent/skill/breakpoint tasks
+- Quality convergence loop with pluggable scoring
+- Same SKILL.md and command format as Claude Code
 
-**Key Success Factors:**
-1. Verify idle hook timing matches expected behavior
-2. Implement robust hook dispatcher for extensibility
-3. Port skills with minimal changes
-4. Create intuitive slash commands
+**Validation:**
+- 82 unit/integration tests passing across 17 test files
+- E2E babysitter run completed (hello-world process, 2 node tasks, 3 iterations)
+- SDK `commitEffectResult` used directly for reliable task result commits
 
-**Estimated Effort:** 17-25 days across 7 phases
-
-**Recommended Approach:**
-1. Start with Phase 1-2 to validate core mechanism and skills
-2. Add interview/setup (Phase 3) for full workflow
-3. Implement hook system (Phase 4) for extensibility
-4. Add advanced features incrementally
+**Remaining:**
+- Live OpenCode session smoke validation (interactive breakpoints, ask-response, persistence across restarts)
+- PR and merge
 
 ---
 
-*Generated by Babysitter Orchestration Process - v3.0*
+*OpenCode plugin — packages/opencode-plugin/ — v0.0.169*
