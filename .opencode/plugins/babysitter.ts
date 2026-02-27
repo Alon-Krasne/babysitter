@@ -11,13 +11,10 @@ import fs from "node:fs"
  * session.idle to keep the orchestration loop running autonomously.
  */
 
-const BABYSITTER_BIN = path.resolve(
-  import.meta.dirname ?? __dirname,
-  "../../packages/babysitter/bin/babysitter.js"
-)
+const BABYSITTER_CMD = "babysitter"
 
 function babysitterCmd(args: string, cwd: string): string {
-  return execSync(`node ${BABYSITTER_BIN} ${args}`, {
+  return execSync(`${BABYSITTER_CMD} ${args}`, {
     encoding: "utf8",
     cwd,
     timeout: 60_000,
