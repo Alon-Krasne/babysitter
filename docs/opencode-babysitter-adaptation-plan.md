@@ -471,68 +471,81 @@ if (event.type === "session.idle") {
 
 ## Implementation Phases
 
+Status legend: `[x]` completed, `[ ]` remaining.
+
 ### Phase 1: Core Infrastructure
 **Complexity:** Medium | **Duration:** 3 days
 
-- [ ] Plugin entry point with OpenCode API
-- [ ] Session state management (Map + file)
-- [ ] Basic tools (setup, iterate, task_post, status, stop)
-- [ ] SDK CLI wrappers using Bun shell
-- [ ] Idle hook for auto-continuation
-- [ ] Promise tag tracking via `tool.execute.after`
+- [x] Plugin entry point with OpenCode API
+- [x] Session state management (Map + file)
+- [x] Basic tools and loop controls (`setup`, `resume`, `associate`, `status`, `stop`) plus iterate/task post via CLI wrappers
+- [x] SDK CLI wrappers (implemented via Node child process executor)
+- [x] Idle hook for auto-continuation
+- [x] Tool lifecycle dispatch via `tool.execute.after`
 
 ### Phase 2: Skills & Commands
 **Complexity:** Low | **Duration:** 1-2 days
 
-- [ ] Port `babysit` skill (SKILL.md)
-- [ ] Port `babysitter-score` skill
-- [ ] Create `/babysit` command
-- [ ] Create `/babysit-resume` command
-- [ ] Create `/babysit-status` command
+- [x] Port `babysit` skill (SKILL.md)
+- [x] Port `babysitter-score` skill
+- [x] Create `/babysit` command
+- [x] Create `/babysit-resume` command
+- [x] Create `/babysit-status` command
 
 ### Phase 3: Interview & Setup
 **Complexity:** Medium | **Duration:** 2-3 days
 
-- [ ] `babysitter_ask` tool (AskUserQuestion equivalent)
-- [ ] `setupBabysitterRun()` function
-- [ ] `setupBabysitterRunResume()` function
-- [ ] `associateSessionWithRun()` function
-- [ ] Interview phase instructions in skill
+- [x] `babysitter_ask` tool (AskUserQuestion equivalent)
+- [x] `setupBabysitterRun()` function
+- [x] `setupBabysitterRunResume()` function
+- [x] `associateSessionWithRun()` function
+- [x] Interview phase instructions in skill
 
 ### Phase 4: Hook System
 **Complexity:** High | **Duration:** 3-5 days
 
-- [ ] Hook dispatcher with multi-directory discovery
-- [ ] `on-iteration-start` (native orchestrator)
-- [ ] `on-iteration-end` (finalization)
-- [ ] Lifecycle hooks (run-start, complete, fail)
-- [ ] Task hooks (task-start, complete)
-- [ ] Shell script execution via Bun
+- [x] Hook dispatcher with multi-directory discovery
+- [x] `on-iteration-start` (native orchestrator)
+- [x] `on-iteration-end` (finalization)
+- [x] Lifecycle hooks (run-start, complete, fail)
+- [x] Task hooks (task-start, complete)
+- [x] Shell script hook execution (via child process runner)
 
 ### Phase 5: Advanced Task Types
 **Complexity:** High | **Duration:** 3-4 days
 
-- [ ] Agent task execution (`kind: "agent"`)
-- [ ] Skill task invocation (`kind: "skill"`)
-- [ ] Parallel task batching
-- [ ] Breakpoint handling via user interaction
+- [x] Agent task execution (`kind: "agent"`)
+- [x] Skill task invocation (`kind: "skill"`)
+- [x] Parallel task batching
+- [x] Breakpoint handling via direct in-session user interaction (`InteractiveBreakpointHandler` with `askUser` callback)
 
 ### Phase 6: Quality Convergence
 **Complexity:** Medium | **Duration:** 2-3 days
 
-- [ ] `babysitter_score` tool
-- [ ] Agent-based quality scoring
-- [ ] Iterative improvement loop
-- [ ] Minimal improvement gates
+- [x] `babysitter_score` tool
+- [x] Agent-based quality scoring orchestration loop (`runConvergenceLoop` with pluggable score/improve callbacks)
+- [x] Iterative improvement loop automation (stalling detection, abort via review callback, score history tracking)
+- [x] Minimal improvement gates (`passThreshold` support in `babysitter_score`)
 
 ### Phase 7: Documentation & Testing
 **Complexity:** Medium | **Duration:** 3-5 days
 
-- [ ] README.md
-- [ ] HOOKS.md development guide
-- [ ] Unit tests for state management
-- [ ] Integration tests for tools
-- [ ] E2E: Full orchestration loop
+- [x] README.md
+- [x] HOOKS.md development guide
+- [x] Unit tests for state management
+- [x] Integration tests for tools
+- [x] E2E: Full orchestration loop (automated test coverage)
+
+### Post-Phase Validation (Current Focus)
+
+- [ ] Live OpenCode runtime smoke validation (start/resume/breakpoint/ask-response/persistence with real sessions)
+- [ ] Final parity checklist sign-off and PR summary
+
+### Current Validation Snapshot (2026-02-27)
+
+- `npm run test:opencode-plugin` -> 82 tests passing (17 test files)
+- `npm run build --workspace=@a5c-ai/babysitter-opencode` -> passing
+- Branch sync -> `feat/opencode-plugin-migration` aligned with `origin/feat/opencode-plugin-migration`
 
 **Total Estimated:** 17-25 days
 

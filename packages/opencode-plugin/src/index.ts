@@ -45,6 +45,20 @@ export type {
 export { CliBreakpointClient } from "./breakpoints/cliBreakpointClient";
 export type { CliBreakpointClientOptions } from "./breakpoints/cliBreakpointClient";
 
+export { InteractiveBreakpointHandler } from "./breakpoints/interactiveBreakpointHandler";
+export type {
+  AskUserFn,
+  InteractiveBreakpointHandlerOptions,
+} from "./breakpoints/interactiveBreakpointHandler";
+
+export { runConvergenceLoop } from "./convergence/qualityConvergenceLoop";
+export type {
+  QualityScoreResult,
+  ConvergenceLoopCallbacks,
+  ConvergenceLoopOptions,
+  ConvergenceLoopResult,
+} from "./convergence/qualityConvergenceLoop";
+
 export { createSessionSkillRunner, createSessionAgentRunner } from "./runners/sessionRunners";
 export type { SessionRunnerOptions } from "./runners/sessionRunners";
 

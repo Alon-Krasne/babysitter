@@ -21,6 +21,12 @@ OpenCode adapter plugin for Babysitter orchestration workflows.
   - `babysitter_stop`
   - `babysitter_ask`
   - `babysitter_score`
+- Interactive breakpoint handling:
+  - `InteractiveBreakpointHandler` prompts users in-session via `askUser` callback (parity with Claude Code `AskUserQuestion` flow).
+  - Falls back to CLI breakpoint client in non-interactive mode.
+- Quality convergence loop:
+  - `runConvergenceLoop()` drives score -> threshold check -> improve -> re-score iterations.
+  - Supports stalling detection, abort via review callback, and score history tracking.
 - Skill and command templates for OpenCode.
 
 ## Development
