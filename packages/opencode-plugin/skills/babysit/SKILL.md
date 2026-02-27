@@ -1,8 +1,7 @@
 ---
 name: babysit
 description: Orchestrate via babysitter. Use this skill to run complex workflows to completion.
-allowed-tools: Read, Grep, Write, Task, Bash, Edit, Glob, WebFetch, TodoWrite, Skill, babysitter_setup, babysitter_resume, babysitter_associate, babysitter_status, babysitter_stop, babysitter_ask, babysitter_score
-version: 0.1.0
+version: 0.2.0
 ---
 
 # babysit
@@ -11,20 +10,22 @@ Orchestrate `.a5c/runs/<runId>/` through iterative execution using `@a5c-ai/baby
 
 ## Dependencies
 
-Make sure the SDK CLI is available:
+Make sure the babysitter CLI is available:
 
 ```bash
-npm i -g @a5c-ai/babysitter@latest @a5c-ai/babysitter-sdk@latest @a5c-ai/babysitter-breakpoints@latest
+npm i -g @a5c-ai/babysitter@latest @a5c-ai/babysitter-sdk@latest
 ```
 
-Use `babysitter` as the CLI command.
+Use `babysitter` as the CLI command. All CLI commands take a `<runDir>` path
+(e.g., `.a5c/runs/my-run-id`), not a bare run ID.
 
 ## Core Iteration Workflow
 
-1. Run iteration (`run:iterate`)
-2. Get effects (`task:list --pending --json`)
-3. Perform effects (node/agent/skill/breakpoint handlers)
-4. Post results (`task:post`)
+1. Step the run forward (`run:step <runDir> --json`)
+2. If status is `waiting`, list pending effects (`task:list <runDir> --pending --json`)
+3. Execute pending effects (node scripts, agent tasks, skill tasks, breakpoints)
+4. Commit results (`task:run <runDir> <effectId> --json` for node tasks, or write result + use SDK `commitEffectResult` programmatically)
+5. Repeat from step 1
 
 ## 1) Create or find a process
 
@@ -36,119 +37,104 @@ Use `babysitter` as the CLI command.
 
 ### Process creation phase
 
-- Create process files (`.js` and companion config where needed) in `.a5c/processes`.
+- Create process files (`.mjs` and companion config where needed) in `.a5c/processes`.
 - Follow existing SDK process conventions and references from process library files.
 - Explain process goals at high level to the user before executing runs.
 
-## 2) Setup session
+## 2) Setup
 
-### New run
-
-1. Activate loop in current session:
-
-```json
-tool: babysitter_setup
-args: { "prompt": "<orchestration prompt>", "maxIterations": 256 }
-```
-
-2. Create run:
+### Create a run
 
 ```bash
-babysitter run:create --process-id <id> --entry <path>#<export> --inputs <file> --json
+babysitter run:create \
+  --process-id <id> \
+  --entry <path>#<export> \
+  --inputs <inputs-file> \
+  --runs-dir .a5c/runs \
+  --run-id <run-id> \
+  --json
 ```
 
-3. Associate run id to session:
+### Resume an existing run
 
-```json
-tool: babysitter_associate
-args: { "runId": "<runId>" }
-```
-
-### Resume run
-
-```json
-tool: babysitter_resume
-args: { "runId": "<runId>", "maxIterations": 256 }
-```
-
-## 3) Run iteration
+Check status first:
 
 ```bash
-babysitter run:iterate <runId> --json --iteration <n>
+babysitter run:status .a5c/runs/<runId> --json
 ```
 
-Typical statuses:
-- `waiting`
-- `completed`
-- `failed`
+Then continue the iteration loop from step 3 below.
 
-## 4) Get effects
+## 3) Step the run
 
 ```bash
-babysitter task:list <runId> --pending --json
+babysitter run:step .a5c/runs/<runId> --json
 ```
 
-## 5) Perform effects
+Statuses:
+- `waiting` — there are pending effects to execute
+- `completed` — the run finished successfully
+- `failed` — the run failed (inspect events for details)
 
-- Prefer delegating non-trivial effects with `Task` when possible.
-- Verify delegated work actually happened (files/tests/results), not just described.
-
-### Breakpoints
-
-- Interactive: ask user directly in the session.
-- Non-interactive: create breakpoints with `@a5c-ai/babysitter-breakpoints` and wait for external resolution.
-
-## 6) Post results
-
-Never write `tasks/<effectId>/result.json` directly.
-
-Correct pattern:
-
-1. Write a separate value file.
-2. Post via CLI.
+## 4) List pending effects
 
 ```bash
-babysitter task:post <runId> <effectId> --status ok --value tasks/<effectId>/output.json --json
+babysitter task:list .a5c/runs/<runId> --pending --json
 ```
 
-Error pattern:
+Each effect has an `effectId`, `kind`, and `taskDefRef`.
+
+## 5) Execute effects
+
+### Node tasks (`kind: "node"`)
+
+The simplest path — let the CLI run and commit in one step:
 
 ```bash
-babysitter task:post <runId> <effectId> --status error --error tasks/<effectId>/error.json --json
+babysitter task:run .a5c/runs/<runId> <effectId> --json
 ```
 
-## 7) Repeat until terminal state
+### Agent tasks (`kind: "agent"`)
 
-- Continue iterate -> list -> execute -> post until `run:status` is `completed`.
-- If state is `failed`, repair process/state/journal and continue.
+Read the task definition from the `taskDefRef` path. It contains a prompt
+in `inputs.prompt`. Execute the prompt (you are the agent — do the work),
+then write the result to `tasks/<effectId>/result.json` in the run directory
+and commit it.
+
+### Skill tasks (`kind: "skill"`)
+
+Read the task definition. Invoke the named skill, capture the result,
+and commit it.
+
+### Breakpoints (`kind: "breakpoint"`)
+
+Ask the user for approval/input, then commit the response.
+
+## 6) Repeat until terminal state
+
+- Continue step -> list -> execute -> commit until `run:status` returns `completed`.
+- If state is `failed`, inspect events and repair:
+
+```bash
+babysitter run:events .a5c/runs/<runId> --limit 50 --reverse --json
+babysitter run:rebuild-state .a5c/runs/<runId> --json
+```
 
 ## Task kinds
 
 | Kind | Description | Executor |
 |------|-------------|----------|
-| `node` | Node script | Local node runtime |
-| `agent` | LLM task | Agent runtime |
-| `skill` | Skill task | Skill system |
-| `breakpoint` | Human approval | Breakpoints API or user prompt |
-| `sleep` | Time gate | Scheduler |
-
-## Recovery guidance
-
-- If run state is inconsistent, inspect events first:
-
-```bash
-babysitter run:events <runId> --limit 50 --reverse
-```
-
-- Rebuild state cache when needed:
-
-```bash
-babysitter run:rebuild-state <runId>
-```
+| `node` | Node script | `task:run` CLI command |
+| `agent` | LLM task | You (the agent) do the work |
+| `skill` | Skill task | Invoke the named skill |
+| `breakpoint` | Human approval | Ask the user |
+| `sleep` | Time gate | Wait until target time |
 
 ## Critical rules
 
-- Never bypass the CLI orchestration loop with custom wrapper scripts.
-- Never use this skill to execute delegated tasks directly; delegated workers should do implementation work.
+- All CLI commands take `<runDir>` paths (`.a5c/runs/<runId>`), not bare IDs.
+- For node tasks, prefer `task:run` which executes and commits in one step.
+- Never write `tasks/<effectId>/result.json` directly without committing via the SDK.
+- Never bypass the CLI orchestration loop.
 - In non-interactive flows, do not self-approve breakpoints.
 - Prefer quality-gated, convergent processes that verify the full user request.
