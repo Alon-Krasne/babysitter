@@ -536,15 +536,39 @@ Status legend: `[x]` completed, `[ ]` remaining.
 - [x] Integration tests for tools
 - [x] E2E: Full orchestration loop (automated test coverage)
 
-### Post-Phase Validation (Current Focus)
+### Post-Phase Validation
 
+- [x] E2E babysitter run with OpenCode plugin orchestrator (hello-world process: scaffold + verify, full run:step -> orchestrate -> commit loop)
 - [ ] Live OpenCode runtime smoke validation (start/resume/breakpoint/ask-response/persistence with real sessions)
 - [ ] Final parity checklist sign-off and PR summary
+
+### E2E Validation Results (2026-02-27)
+
+Ran a real babysitter process (`hello-process.mjs`) end-to-end using the
+OpenCode plugin's `runNativeOrchestrator` + `BabysitterCli` adapter.
+
+**Process:** 2-task hello-world (scaffold files, verify existence).
+
+**Flow verified:**
+1. `babysitter run:create` -> run created
+2. `babysitter run:step` -> status `waiting`, scaffold task pending
+3. Plugin orchestrator picks up node task, executes runner, commits via SDK `commitEffectResult`
+4. `babysitter run:step` -> status `waiting`, verify task pending
+5. Plugin orchestrator executes verify runner, commits result
+6. `babysitter run:step` -> status `completed`, full output returned
+
+**Bugs found and fixed:**
+1. `taskPost` called nonexistent `task:post` CLI command — replaced with direct SDK `commitEffectResult`
+2. `runStatus`/`taskListPending` passed bare `runId` but CLI expects full `runDir` path — added `resolveRunDir` helper
+3. `commitEffectResult` called with `value: undefined` — now reads result.json from disk before committing
+
+**Output:** `Hello, World! From babysitter + OpenCode.` (project scaffolded at `../test-babysitter/output/`)
 
 ### Current Validation Snapshot (2026-02-27)
 
 - `npm run test:opencode-plugin` -> 82 tests passing (17 test files)
 - `npm run build --workspace=@a5c-ai/babysitter-opencode` -> passing
+- E2E babysitter run -> completed (3 iterations, 2 node tasks executed and committed)
 - Branch sync -> `feat/opencode-plugin-migration` aligned with `origin/feat/opencode-plugin-migration`
 
 **Total Estimated:** 17-25 days
