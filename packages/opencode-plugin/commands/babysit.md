@@ -6,11 +6,11 @@ Load the `babysit` skill and follow its instructions strictly.
 
 User request: $ARGUMENTS
 
-The babysitter CLI is at: `node /Users/alonkrasne/Documents/Projects/babysitter/packages/babysitter/bin/babysitter.js`
-
 Start with:
-1. Interview and clarify requirements.
-2. Build or choose a process file.
-3. Create the run with the babysitter CLI.
-4. Run the autonomous loop: `run:step` -> execute effects -> commit -> repeat.
-5. Do NOT stop until the run reaches `completed` or `failed`.
+1. Interview and clarify requirements using `babysitter_ask`.
+2. Build or choose a process file in `.a5c/processes/`.
+3. Use `babysitter_setup` to activate the loop.
+4. Create the run with `babysitter run:create`.
+5. Use `babysitter_associate` to link the run.
+6. Run the autonomous loop: `run:step` -> execute effects -> commit -> repeat.
+7. Do NOT stop until the run reaches `completed` or `failed`.
